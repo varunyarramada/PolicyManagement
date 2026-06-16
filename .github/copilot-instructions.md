@@ -64,6 +64,13 @@ API  →  Application  →  Domain  ←  Infrastructure
 - Use `[ProducesResponseType]` annotations on every endpoint.
 - Version APIs under `/api/v{version}/` from day one.
 
+### CQRS with MediatR
+- Use logical CQRS via MediatR (single database, separated read/write handlers)
+- Commands handle write operations (flag, update)
+- Queries handle read operations (list, get by id, summary)
+- Controllers only call MediatR Send() — no business logic in controllers
+- Do not use physical CQRS (no separate read/write databases)
+
 ### Repository Pattern
 
 - Repository interfaces live in the `Domain` layer.
@@ -279,6 +286,7 @@ PolicyManagement/
 | Events | `{Entity}{PastTenseVerb}Event` | `PolicyCreatedEvent` |
 | Exceptions | `{Condition}Exception` | `PolicyNotFoundException` |
 | Options classes | `{Feature}Options` | `CacheOptions`, `SqlServerOptions` |
+| Pipeline Behaviors | `{Name}PipelineBehavior` | `ValidationPipelineBehavior` |
 
 ---
 
