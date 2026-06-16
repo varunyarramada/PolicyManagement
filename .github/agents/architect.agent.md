@@ -73,6 +73,14 @@ Controllers send via MediatR only. No business logic in controllers.
 | `PATCH` | `/api/v1/policies/flag` | Bulk flag policies for review |
 | `GET` | `/api/v1/policies/summary` | Aggregated statistics |
 
+## Skills
+Read these skill files before producing any output:
+- `.github/skills/clean-architecture.md`
+- `.github/skills/cqrs-mediator.md`
+- `.github/skills/contract-first-api.md`
+- `.github/skills/database-conventions.md`
+- `.github/skills/error-handling.md`
+
 ## Approach
 
 1. **Read source material** — load `docs/Chubb_APAC_Take-Home_Assessment_Backend.docx` and all files under `docs/analysis/` produced by the Product Analyst agent.
