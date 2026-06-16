@@ -162,24 +162,24 @@ A `PolicyBuilder` provides a fluent interface for creating `Policy` instances wi
 // tests/PolicyManagement.Application.Tests/Builders/PolicyBuilder.cs
 public sealed class PolicyBuilder
 {
-    private Guid          _id              = Guid.NewGuid();
-    private string        _policyNumber    = "POL-000001";
-    private string        _holderName      = "Test Policyholder";
-    private string        _lineOfBusiness  = "Marine";
-    private string        _status          = "Active";
-    private decimal       _premiumAmount   = 10_000.00m;
-    private string        _currency        = "SGD";
-    private DateOnly      _effectiveDate   = new(2025, 1, 1);
-    private DateOnly      _expiryDate      = new(2025, 12, 31);
-    private string        _region          = "Singapore";
-    private string        _underwriter     = "James Wong";
-    private bool          _flaggedForReview = false;
+    private Guid             _id              = Guid.NewGuid();
+    private string           _policyNumber    = "POL-000001";
+    private string           _holderName      = "Test Policyholder";
+    private LineOfBusiness   _lineOfBusiness  = LineOfBusiness.Marine;
+    private PolicyStatus     _status          = PolicyStatus.Active;
+    private decimal          _premiumAmount   = 10_000.00m;
+    private string           _currency        = "SGD";
+    private DateOnly         _effectiveDate   = new(2025, 1, 1);
+    private DateOnly         _expiryDate      = new(2025, 12, 31);
+    private string           _region          = "Singapore";
+    private string           _underwriter     = "James Wong";
+    private bool             _flaggedForReview = false;
 
-    public PolicyBuilder WithId(Guid id)                      { _id = id;                       return this; }
-    public PolicyBuilder WithPolicyNumber(string number)      { _policyNumber = number;         return this; }
-    public PolicyBuilder WithStatus(string status)            { _status = status;               return this; }
-    public PolicyBuilder WithRegion(string region)            { _region = region;               return this; }
-    public PolicyBuilder WithLineOfBusiness(string lob)       { _lineOfBusiness = lob;          return this; }
+    public PolicyBuilder WithId(Guid id)                           { _id = id;                       return this; }
+    public PolicyBuilder WithPolicyNumber(string number)           { _policyNumber = number;         return this; }
+    public PolicyBuilder WithStatus(PolicyStatus status)           { _status = status;               return this; }
+    public PolicyBuilder WithRegion(string region)                 { _region = region;               return this; }
+    public PolicyBuilder WithLineOfBusiness(LineOfBusiness lob)    { _lineOfBusiness = lob;          return this; }
     public PolicyBuilder WithPremium(decimal amount, string currency = "SGD")
     {
         _premiumAmount = amount;
@@ -209,8 +209,8 @@ public sealed class PolicyBuilder
         UpdatedAt        = DateTimeOffset.UtcNow
     };
 
-    public static PolicyBuilder Active()   => new PolicyBuilder().WithStatus("Active");
-    public static PolicyBuilder Expired()  => new PolicyBuilder().WithStatus("Expired");
+    public static PolicyBuilder Active()   => new PolicyBuilder().WithStatus(PolicyStatus.Active);
+    public static PolicyBuilder Expired()  => new PolicyBuilder().WithStatus(PolicyStatus.Expired);
     public static PolicyBuilder Flagged()  => new PolicyBuilder().WithFlaggedForReview(true);
 }
 ```
@@ -530,7 +530,7 @@ public class PolicyTests
     public void Flag_WhenPolicyCancelled_ShouldThrowInvalidPolicyStateException()
     {
         // Arrange
-        var policy = new PolicyBuilder().WithStatus("Cancelled").Build();
+        var policy = new PolicyBuilder().WithStatus(PolicyStatus.Cancelled).Build();
 
         // Act
         var act = () => policy.Flag();
