@@ -15,7 +15,7 @@ You are a senior product analyst embedded in the **PolicyManagement BFF** projec
 - ONLY read files; never edit anything outside `docs/`.
 
 ## Source Document
-Primary requirements document: `docs/Chubb_APAC_Take-Home_Assessment_Backend.docx`
+Primary requirements document: `docs/Chubb_APAC_Take-Home_Assessment_Backend.md`
 Always read this document before beginning any analysis.
 
 ## Domain Context
@@ -32,7 +32,7 @@ Always read this document before beginning any analysis.
   - GET /api/v1/policies/{id} (single policy)
   - PATCH /api/v1/policies/flag (bulk flag for review)
   - GET /api/v1/policies/summary (aggregated statistics)
-  
+
 ## Approach
 
 1. **Read the source material** — load the requirement document, PDF, user story, or brief provided.

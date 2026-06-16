@@ -83,7 +83,7 @@ Read these skill files before producing any output:
 
 ## Approach
 
-1. **Read source material** — load `docs/Chubb_APAC_Take-Home_Assessment_Backend.docx` and all files under `docs/analysis/` produced by the Product Analyst agent.
+1. **Read source material** — load `docs/Chubb_APAC_Take-Home_Assessment_Backend.md` and all files under `docs/analysis/` produced by the Product Analyst agent.
 2. **Design layer responsibilities** — define what belongs in each Clean Architecture layer for this specific domain.
 3. **Design the database schema** — entities, relationships, columns, data types, constraints, and indexing strategy for policy queries.
 4. **Define the API contract structure** — endpoint shapes, request/response schemas, pagination contracts, error response shapes.
