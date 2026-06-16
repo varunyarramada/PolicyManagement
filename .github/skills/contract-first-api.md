@@ -366,7 +366,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [Singapore, HongKong, Australia, Japan, Thailand, Indonesia, Malaysia, Philippines]
+            enum: [Singapore, Hong Kong, Australia, Japan, Thailand, Indonesia, Malaysia, Philippines]
         - name: effectiveDateFrom
           in: query
           schema:

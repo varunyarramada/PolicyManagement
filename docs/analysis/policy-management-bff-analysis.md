@@ -13,7 +13,7 @@ This document analyses the requirements for the **PolicyManagement Backend-for-F
 | FR-01 | The system shall expose a `GET /api/v1/policies` endpoint that returns a paginated list of policies. | Assessment brief — endpoint specification |
 | FR-02 | The list endpoint shall support filtering by `status` (Active, Expired, Pending, Cancelled). | Assessment brief — filter specification |
 | FR-03 | The list endpoint shall support filtering by `lineOfBusiness` (Property, Casualty, A&H, Marine). | Assessment brief — filter specification |
-| FR-04 | The list endpoint shall support filtering by `region` (Singapore, HongKong, Australia, Japan, Thailand, Indonesia, Malaysia, Philippines). | Assessment brief — filter specification |
+| FR-04 | The list endpoint shall support filtering by `region` (Singapore, Hong Kong, Australia, Japan, Thailand, Indonesia, Malaysia, Philippines). | Assessment brief — filter specification |
 | FR-05 | The list endpoint shall support filtering by `effectiveDateFrom` and `effectiveDateTo` as an inclusive date range in ISO 8601 `date` format. | Assessment brief — filter specification |
 | FR-06 | The list endpoint shall support free-text `search` across policy number, policyholder name, and underwriter name. | Assessment brief — search specification |
 | FR-07 | The list endpoint shall support sorting by `policyNumber`, `status`, `premiumAmount`, `effectiveDate`, `expiryDate`, `createdAt`, and `policyholderName`. The sort format is a single comma-separated parameter: `sort=field,direction` (e.g., `sort=premiumAmount,desc`). | Assessment brief — sort specification; G-06 and G-14 resolved |
