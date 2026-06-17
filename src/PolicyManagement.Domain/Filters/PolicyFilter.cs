@@ -9,8 +9,8 @@ namespace PolicyManagement.Domain.Filters;
 /// </summary>
 /// <param name="Page">1-based page number. Must be &gt;= 1.</param>
 /// <param name="Size">Number of records per page. Must be between 1 and 100 inclusive.</param>
-/// <param name="SortField">The field to sort by (e.g. "createdAt", "premiumAmount").</param>
-/// <param name="SortDirection">Sort direction: "asc" or "desc".</param>
+/// <param name="SortField">The field to sort by. Must be one of the values in <see cref="Constants.PolicySortFields.All"/>.</param>
+/// <param name="SortDirection">Sort direction. Defaults to <see cref="SortDirection.Desc"/> for <c>createdAt</c> and <see cref="SortDirection.Asc"/> for all other fields.</param>
 /// <param name="Status">Optional filter by <see cref="PolicyStatus"/>.</param>
 /// <param name="LineOfBusiness">Optional filter by <see cref="Enums.LineOfBusiness"/>.</param>
 /// <param name="Region">Optional filter by region string.</param>
@@ -24,7 +24,7 @@ public sealed record PolicyFilter(
     int Page,
     int Size,
     string SortField,
-    string SortDirection,
+    SortDirection SortDirection,
     PolicyStatus? Status,
     LineOfBusiness? LineOfBusiness,
     string? Region,

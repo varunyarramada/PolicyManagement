@@ -1,4 +1,6 @@
 using PolicyManagement.Domain.Enums;
+using PolicyManagement.Domain.Exceptions;
+using PolicyManagement.Domain.Interfaces;
 
 namespace PolicyManagement.Domain.Entities;
 
@@ -9,7 +11,7 @@ namespace PolicyManagement.Domain.Entities;
 /// No EF Core annotations are applied — all mapping is handled by
 /// <c>PolicyManagement.Infrastructure</c> via Fluent API.
 /// </summary>
-public class Policy
+public class Policy : IAuditableEntity
 {
     /// <summary>Gets the unique identifier for the policy (client-generated GUID).</summary>
     public Guid Id { get; private set; }
@@ -113,6 +115,12 @@ public class Policy
         string underwriter,
         DateTimeOffset now)
     {
+        if (expiryDate <= effectiveDate)
+            throw new InvalidPolicyStateException(id, "Expiry date must be after effective date.");
+
+        if (premiumAmount <= 0)
+            throw new InvalidPolicyStateException(id, "Premium amount must be positive.");
+
         return new Policy
         {
             Id = id,
