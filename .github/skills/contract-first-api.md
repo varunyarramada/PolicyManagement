@@ -65,12 +65,16 @@ docs/openapi/
     │   └── description
     ├── servers
     │   └── url: /api/v1
+    ├── security (top-level requirement)
+    │   └── - BearerAuth: []
     ├── paths
     │   ├── /policies
     │   ├── /policies/{id}
     │   ├── /policies/flag
     │   └── /policies/summary
     └── components
+        ├── securitySchemes
+        │   └── BearerAuth (JWT Bearer token)
         ├── schemas
         │   ├── PolicyDto
         │   ├── PolicySummaryResponse
@@ -84,6 +88,31 @@ docs/openapi/
 ```
 
 Reusable parameters (pagination, sorting) are declared once under `components/parameters` and referenced on every endpoint that uses them — never duplicated.
+
+### Security Scheme — JWT Bearer Authentication
+
+The spec must include a top-level `security` requirement to enforce authentication on all endpoints:
+
+```yaml
+security:
+  - BearerAuth: []
+```
+
+The `BearerAuth` security scheme must be defined under `components/securitySchemes`:
+
+```yaml
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        JWT Bearer token issued by Keycloak. Include in the Authorization
+        header as: Bearer {token}. All endpoints require a valid token.
+```
+
+See [ADR-007](../../docs/architecture/decisions/ADR-007-jwt-bearer-authentication.md) for the authentication decision rationale.
 
 ---
 
@@ -318,10 +347,19 @@ ProblemDetails:
 | `200 OK` | Successful GET returning data |
 | `204 No Content` | Successful PATCH/POST/DELETE with no response body |
 | `400 Bad Request` | Validation failure — `errors` map present in `ProblemDetails` |
+| `401 Unauthorized` | Missing or invalid JWT Bearer token — **required on all endpoints** |
+| `403 Forbidden` | Valid token but missing required role (e.g., `Policy.Write` on `/flag` endpoint) |
 | `404 Not Found` | Resource not found (policy ID does not exist) |
 | `409 Conflict` | State conflict (e.g., policy already flagged) |
 | `422 Unprocessable Entity` | Semantically invalid request (valid structure, invalid business state) |
 | `500 Internal Server Error` | Unhandled server error — no internal details in response |
+
+**Authentication error responses:**
+- Every endpoint must declare `401 Unauthorized` in its OpenAPI response definitions.
+- Endpoints requiring role-based access (e.g., `PATCH /api/v1/policies/flag`) must also declare `403 Forbidden`.
+- Both `401` and `403` responses use `application/problem+json` content type with `ProblemDetails` schema.
+
+See [ADR-007](../../docs/architecture/decisions/ADR-007-jwt-bearer-authentication.md) for the full authentication decision.
 
 Stack traces and internal exception messages are **never** included in error responses. `GlobalExceptionMiddleware` ensures this.
 
@@ -464,6 +502,10 @@ Every controller action must implement the contract exactly as declared in the s
 - Every non-`2xx` response declared in the spec is annotated with `[ProducesResponseType]`.
 - No undeclared status codes are returned by the action.
 - Content type is `application/json` for success responses, `application/problem+json` for error responses.
+- **Authentication:** The controller class must have `[Authorize]` attribute — all actions require a valid JWT token by default.
+- **Authorization:** Actions requiring specific roles must use `[Authorize(Policy = "PolicyWrite")]` (e.g., `PATCH /flag`).
+- **Authentication responses:** Every action must include `[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]`.
+- **Authorization responses:** Role-protected actions must also include `[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]`.
 
 If the spec declares a query parameter as optional (no `required: true`), the corresponding C# parameter is nullable or has a default value. If the spec declares a path parameter as `format: uuid`, the C# type is `Guid`.
 
@@ -474,6 +516,7 @@ If the spec declares a query parameter as optional (no `required: true`), the co
 
 [ApiController]
 [Route("api/v1/[controller]")]
+[Authorize]  // All actions require valid JWT token
 public sealed class PoliciesController : ControllerBase
 {
     private readonly IMediator _mediator;
@@ -485,6 +528,7 @@ public sealed class PoliciesController : ControllerBase
     [Produces("application/json")]
     [ProducesResponseType(typeof(PagedResponse<PolicyDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> List(
         [FromQuery] int page = 1,
         [FromQuery] int size = 20,
@@ -512,6 +556,7 @@ public sealed class PoliciesController : ControllerBase
     [Produces("application/json")]
     [ProducesResponseType(typeof(PolicyDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> GetById(
         Guid id,
         CancellationToken cancellationToken)
@@ -524,8 +569,11 @@ public sealed class PoliciesController : ControllerBase
     /// <summary>Bulk flag policies for review.</summary>
     [HttpPatch("flag")]
     [Consumes("application/json")]
+    [Authorize(Policy = "PolicyWrite")]  // Requires Policy.Write role
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Flag(
         [FromBody] FlagPoliciesRequest request,
@@ -540,6 +588,7 @@ public sealed class PoliciesController : ControllerBase
     [HttpGet("summary")]
     [Produces("application/json")]
     [ProducesResponseType(typeof(PolicySummaryResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Summary(CancellationToken cancellationToken)
     {
         var result = await _mediator.Send(
@@ -562,12 +611,21 @@ public sealed class PoliciesController : ControllerBase
 | Use `typeof(ProblemDetails)` for all 4xx and 5xx responses | Enforces consistent error schema in Swagger |
 | Use `StatusCodes.Status{NNN}{Name}` constants, not raw integers | Readability and refactoring safety |
 | Annotate `204 No Content` actions with the untyped overload | No body means no type parameter |
+| **Always include `401 Unauthorized` on every action** | All endpoints require authentication — this is never optional |
+| **Include `403 Forbidden` on role-protected actions** | Actions with `[Authorize(Policy = "PolicyWrite")]` must declare 403 |
 
 ```csharp
 // All of these are required — not optional documentation niceties
 [ProducesResponseType(typeof(PolicyDto), StatusCodes.Status200OK)]
 [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]  // Required on all actions
 [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+
+// For role-protected actions (e.g., PATCH /flag):
+[Authorize(Policy = "PolicyWrite")]
+[ProducesResponseType(StatusCodes.Status204NoContent)]
+[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]  // Required for role-protected actions
 ```
 
 The Swagger UI and any generated client SDKs are derived from these annotations combined with the OpenAPI spec. Incomplete annotations result in inaccurate client code and misleading documentation.
@@ -579,12 +637,20 @@ The Swagger UI and any generated client SDKs are derived from these annotations 
 Before raising a PR for any new or modified endpoint, verify:
 
 - [ ] OpenAPI spec updated with the new or changed endpoint
+- [ ] Security scheme defined in OpenAPI spec (`components/securitySchemes/BearerAuth`)
+- [ ] Top-level `security` requirement declared in OpenAPI spec
 - [ ] All query parameters in the spec have a matching `[FromQuery]` parameter in the action
 - [ ] All path parameters in the spec match `[HttpGet("{param}")]` route templates
 - [ ] All request body schemas in the spec have a matching `[FromBody]` model
 - [ ] All response schemas in the spec have a matching `[ProducesResponseType]` annotation
 - [ ] All `4xx` responses in the spec use `ProblemDetails` schema
+- [ ] `401 Unauthorized` response declared on every endpoint in the spec
+- [ ] `403 Forbidden` response declared on role-protected endpoints in the spec
 - [ ] No status codes are returned from the action that are not declared in the spec
+- [ ] `[Authorize]` attribute present on controller class
+- [ ] `[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]` on every action
+- [ ] `[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]` on role-protected actions
+- [ ] `[Authorize(Policy = "PolicyWrite")]` on actions requiring specific roles (e.g., PATCH /flag)
 - [ ] Enum values in query parameters are validated (via `GetPoliciesQueryValidator`) against the spec-declared enum list
 - [ ] Date and UUID format parameters use `DateOnly` and `Guid` C# types respectively
 - [ ] Response property names in JSON match the camelCase names declared in the spec
