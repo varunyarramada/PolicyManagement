@@ -35,13 +35,16 @@ public sealed class ValidationPipelineBehavior<TRequest, TResponse>(
         if (!validators.Any())
             return await next();
 
-        var context = new ValidationContext<TRequest>(request);
-
-        var failures = (await Task.WhenAll(
-                validators.Select(v => v.ValidateAsync(context, cancellationToken))))
-            .SelectMany(result => result.Errors)
-            .Where(failure => failure is not null)
-            .ToList();
+        // Create a separate ValidationContext per validator to avoid potential
+        // data races on shared context state (e.g. MessageFormatter, RootContextData)
+        // when validators are run sequentially.
+        var failures = new List<FluentValidation.Results.ValidationFailure>();
+        foreach (var validator in validators)
+        {
+            var result = await validator.ValidateAsync(
+                new ValidationContext<TRequest>(request), cancellationToken);
+            failures.AddRange(result.Errors.Where(f => f is not null));
+        }
 
         if (failures.Count > 0)
             throw new ValidationException(failures);

@@ -17,8 +17,14 @@ public static class ApplicationServiceExtensions
     ///   <item><description>MediatR with all handlers in this assembly.</description></item>
     ///   <item>
     ///     <description>
-    ///       <see cref="ValidationPipelineBehavior{TRequest,TResponse}"/> — runs FluentValidation
-    ///       before every handler.
+    ///       <see cref="LoggingPipelineBehavior{TRequest,TResponse}"/> (outermost) — logs
+    ///       handler entry, exit, elapsed time, and errors.
+    ///     </description>
+    ///   </item>
+    ///   <item>
+    ///     <description>
+    ///       <see cref="ValidationPipelineBehavior{TRequest,TResponse}"/> (inner) — runs
+    ///       FluentValidation before the handler executes.
     ///     </description>
     ///   </item>
     ///   <item>
@@ -28,6 +34,13 @@ public static class ApplicationServiceExtensions
     ///     </description>
     ///   </item>
     /// </list>
+    /// <para>
+    /// Pipeline execution order (outermost → innermost):
+    /// <c>LoggingPipelineBehavior → ValidationPipelineBehavior → Handler</c>
+    /// </para>
+    /// <para>
+    /// Role name constants for authorisation checks are defined in <see cref="Constants.Roles"/>.
+    /// </para>
     /// </summary>
     /// <param name="services">The service collection to add to.</param>
     /// <returns>The same <see cref="IServiceCollection"/> for chaining.</returns>
@@ -38,6 +51,9 @@ public static class ApplicationServiceExtensions
         services.AddMediatR(cfg =>
         {
             cfg.RegisterServicesFromAssembly(assembly);
+            // Behaviours are registered outermost-first.
+            // LoggingPipelineBehavior wraps everything — including validation failures.
+            cfg.AddOpenBehavior(typeof(LoggingPipelineBehavior<,>));
             cfg.AddOpenBehavior(typeof(ValidationPipelineBehavior<,>));
         });
 
