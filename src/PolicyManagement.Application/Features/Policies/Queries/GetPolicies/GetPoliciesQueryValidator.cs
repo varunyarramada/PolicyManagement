@@ -1,4 +1,5 @@
 using FluentValidation;
+using PolicyManagement.Application.Constants;
 using PolicyManagement.Domain.Constants;
 using PolicyManagement.Domain.Enums;
 
@@ -11,24 +12,6 @@ namespace PolicyManagement.Application.Features.Policies.Queries.GetPolicies;
 /// </summary>
 public sealed class GetPoliciesQueryValidator : AbstractValidator<GetPoliciesQuery>
 {
-    /// <summary>
-    /// Maps the API-facing line-of-business display strings (including <c>"A&amp;H"</c>)
-    /// to their domain enum equivalents.
-    /// <para>
-    /// Defined here (not in the handler) so that both the validator and handler share a
-    /// single source of truth — adding a new line of business requires updating only this map.
-    /// The handler references this field directly: <see cref="GetPoliciesQueryHandler"/>.
-    /// </para>
-    /// </summary>
-    internal static readonly IReadOnlyDictionary<string, LineOfBusiness> LobParseMap =
-        new Dictionary<string, LineOfBusiness>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Property"] = LineOfBusiness.Property,
-            ["Casualty"]  = LineOfBusiness.Casualty,
-            ["A&H"]       = LineOfBusiness.AH,
-            ["Marine"]    = LineOfBusiness.Marine,
-        };
-
     /// <summary>Initialises all validation rules.</summary>
     public GetPoliciesQueryValidator()
     {
@@ -60,10 +43,10 @@ public sealed class GetPoliciesQueryValidator : AbstractValidator<GetPoliciesQue
                      $"Allowed values: {string.Join(", ", Enum.GetNames<PolicyStatus>())}.");
 
         RuleFor(q => q.LineOfBusiness)
-            .Must(lob => lob == null || LobParseMap.ContainsKey(lob))
+            .Must(lob => lob == null || LineOfBusinessMap.DisplayToEnum.ContainsKey(lob))
             .WithMessage(
                 q => $"'lineOfBusiness' value '{q.LineOfBusiness}' is not valid. " +
-                     $"Allowed values: {string.Join(", ", LobParseMap.Keys.Order())}.");
+                     $"Allowed values: {string.Join(", ", LineOfBusinessMap.DisplayToEnum.Keys.Order())}.");
 
         RuleFor(q => q.Region)
             .Must(r => r == null || Regions.IsValid(r))

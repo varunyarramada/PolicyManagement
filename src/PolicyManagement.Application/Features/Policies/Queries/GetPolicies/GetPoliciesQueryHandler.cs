@@ -1,5 +1,6 @@
 using MediatR;
 using Microsoft.Extensions.Logging;
+using PolicyManagement.Application.Constants;
 using PolicyManagement.Application.DTOs;
 using PolicyManagement.Application.Mappings;
 using PolicyManagement.Domain.Constants;
@@ -26,7 +27,7 @@ namespace PolicyManagement.Application.Features.Policies.Queries.GetPolicies;
 /// </para>
 /// <para>
 /// Line-of-business string → enum mapping is sourced from
-/// <see cref="GetPoliciesQueryValidator.LobParseMap"/> to keep a single source of truth.
+/// <see cref="LineOfBusinessMap.DisplayToEnum"/> to keep a single source of truth.
 /// </para>
 /// </summary>
 public sealed class GetPoliciesQueryHandler(
@@ -124,7 +125,7 @@ public sealed class GetPoliciesQueryHandler(
     /// <summary>
     /// Parses an optional line-of-business string (including <c>"A&amp;H"</c>) to its
     /// <see cref="LineOfBusiness"/> equivalent using the shared
-    /// <see cref="GetPoliciesQueryValidator.LobParseMap"/>.
+    /// <see cref="LineOfBusinessMap.DisplayToEnum"/>.
     /// Returns <see langword="null"/> when the input is absent.
     /// Validation has already confirmed the value is in the map if present.
     /// </summary>
@@ -133,6 +134,6 @@ public sealed class GetPoliciesQueryHandler(
         if (string.IsNullOrWhiteSpace(lob))
             return null;
 
-        return GetPoliciesQueryValidator.LobParseMap.TryGetValue(lob, out var value) ? value : null;
+        return LineOfBusinessMap.DisplayToEnum.TryGetValue(lob, out var value) ? value : null;
     }
 }
