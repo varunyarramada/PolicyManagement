@@ -2,7 +2,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using PolicyManagement.Application.Features.Policies.Queries.GetPolicies;
-using PolicyManagement.Application.Tests.Helpers;
+using PolicyManagement.TestHelpers;
 using PolicyManagement.Domain.Enums;
 using PolicyManagement.Domain.Filters;
 using PolicyManagement.Domain.Interfaces;
@@ -16,10 +16,16 @@ namespace PolicyManagement.Application.Tests.Features.Policies.Queries;
 /// </summary>
 public sealed class GetPoliciesQueryHandlerTests
 {
-    private readonly Mock<IPolicyRepository> _repositoryMock = new();
+    private readonly Mock<IPolicyRepository> _repositoryMock;
+    private readonly GetPoliciesQueryHandler _handler;
 
-    private GetPoliciesQueryHandler CreateHandler() =>
-        new(_repositoryMock.Object, NullLogger<GetPoliciesQueryHandler>.Instance);
+    public GetPoliciesQueryHandlerTests()
+    {
+        _repositoryMock = new Mock<IPolicyRepository>();
+        _handler = new GetPoliciesQueryHandler(
+            _repositoryMock.Object,
+            NullLogger<GetPoliciesQueryHandler>.Instance);
+    }
 
     // -----------------------------------------------------------------------
     // Happy path
@@ -35,10 +41,9 @@ public sealed class GetPoliciesQueryHandlerTests
             .ReturnsAsync((policies, 3));
 
         var query   = new GetPoliciesQuery(Page: 1, Size: 20);
-        var handler = CreateHandler();
 
         // Act
-        var result = await handler.Handle(query, CancellationToken.None);
+        var result = await _handler.Handle(query, CancellationToken.None);
 
         // Assert
         result.Data.Should().HaveCount(3);
@@ -66,10 +71,9 @@ public sealed class GetPoliciesQueryHandlerTests
             .Setup(r => r.GetPagedAsync(It.IsAny<PolicyFilter>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((new[] { policy }, 1));
 
-        var handler = CreateHandler();
 
         // Act
-        var result = await handler.Handle(new GetPoliciesQuery(), CancellationToken.None);
+        var result = await _handler.Handle(new GetPoliciesQuery(), CancellationToken.None);
 
         // Assert
         result.Data[0].LineOfBusiness.Should().Be("A&H");
@@ -87,10 +91,9 @@ public sealed class GetPoliciesQueryHandlerTests
             .Setup(r => r.GetPagedAsync(It.IsAny<PolicyFilter>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Array.Empty<Domain.Entities.Policy>(), 0));
 
-        var handler = CreateHandler();
 
         // Act
-        var result = await handler.Handle(new GetPoliciesQuery(), CancellationToken.None);
+        var result = await _handler.Handle(new GetPoliciesQuery(), CancellationToken.None);
 
         // Assert
         result.Data.Should().BeEmpty();
@@ -111,10 +114,9 @@ public sealed class GetPoliciesQueryHandlerTests
             .ReturnsAsync((Array.Empty<Domain.Entities.Policy>(), 3));
 
         var query   = new GetPoliciesQuery(Page: 5, Size: 20);
-        var handler = CreateHandler();
 
         // Act
-        var result = await handler.Handle(query, CancellationToken.None);
+        var result = await _handler.Handle(query, CancellationToken.None);
 
         // Assert — HTTP 200 is implied by successful return; empty data + full pagination meta
         result.Data.Should().BeEmpty();
@@ -142,10 +144,9 @@ public sealed class GetPoliciesQueryHandlerTests
             .Callback<PolicyFilter, CancellationToken>((f, _) => capturedFilter = f)
             .ReturnsAsync((Array.Empty<Domain.Entities.Policy>(), 0));
 
-        var handler = CreateHandler();
 
         // Act
-        await handler.Handle(new GetPoliciesQuery(Sort: sort), CancellationToken.None);
+        await _handler.Handle(new GetPoliciesQuery(Sort: sort), CancellationToken.None);
 
         // Assert
         capturedFilter.Should().NotBeNull();
@@ -167,10 +168,9 @@ public sealed class GetPoliciesQueryHandlerTests
             .Callback<PolicyFilter, CancellationToken>((f, _) => capturedFilter = f)
             .ReturnsAsync((Array.Empty<Domain.Entities.Policy>(), 0));
 
-        var handler = CreateHandler();
 
         // Act
-        await handler.Handle(new GetPoliciesQuery(Status: "Expired"), CancellationToken.None);
+        await _handler.Handle(new GetPoliciesQuery(Status: "Expired"), CancellationToken.None);
 
         // Assert
         capturedFilter!.Status.Should().Be(PolicyStatus.Expired);
@@ -186,10 +186,9 @@ public sealed class GetPoliciesQueryHandlerTests
             .Callback<PolicyFilter, CancellationToken>((f, _) => capturedFilter = f)
             .ReturnsAsync((Array.Empty<Domain.Entities.Policy>(), 0));
 
-        var handler = CreateHandler();
 
         // Act
-        await handler.Handle(new GetPoliciesQuery(LineOfBusiness: "A&H"), CancellationToken.None);
+        await _handler.Handle(new GetPoliciesQuery(LineOfBusiness: "A&H"), CancellationToken.None);
 
         // Assert
         capturedFilter!.LineOfBusiness.Should().Be(Domain.Enums.LineOfBusiness.AH);
@@ -205,10 +204,9 @@ public sealed class GetPoliciesQueryHandlerTests
             .Callback<PolicyFilter, CancellationToken>((f, _) => capturedFilter = f)
             .ReturnsAsync((Array.Empty<Domain.Entities.Policy>(), 0));
 
-        var handler = CreateHandler();
 
         // Act
-        await handler.Handle(new GetPoliciesQuery(Region: "Hong Kong"), CancellationToken.None);
+        await _handler.Handle(new GetPoliciesQuery(Region: "Hong Kong"), CancellationToken.None);
 
         // Assert
         capturedFilter!.Region.Should().Be("Hong Kong");
@@ -230,10 +228,9 @@ public sealed class GetPoliciesQueryHandlerTests
             .Setup(r => r.GetPagedAsync(It.IsAny<PolicyFilter>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Array.Empty<Domain.Entities.Policy>(), totalCount));
 
-        var handler = CreateHandler();
 
         // Act
-        var result = await handler.Handle(
+        var result = await _handler.Handle(
             new GetPoliciesQuery(Page: page, Size: size), CancellationToken.None);
 
         // Assert
@@ -252,10 +249,9 @@ public sealed class GetPoliciesQueryHandlerTests
             .Setup(r => r.GetPagedAsync(It.IsAny<PolicyFilter>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Array.Empty<Domain.Entities.Policy>(), 0));
 
-        var handler = CreateHandler();
 
         // Act
-        await handler.Handle(new GetPoliciesQuery(), CancellationToken.None);
+        await _handler.Handle(new GetPoliciesQuery(), CancellationToken.None);
 
         // Assert
         _repositoryMock.Verify(

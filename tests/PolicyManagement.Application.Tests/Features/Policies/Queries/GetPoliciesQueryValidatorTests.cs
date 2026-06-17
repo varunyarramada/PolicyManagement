@@ -163,8 +163,8 @@ public sealed class GetPoliciesQueryValidatorTests
     [InlineData("unknownField")]
     [InlineData("createdAt,invalid")]  // direction is invalid
     [InlineData("createdAt,desc,extra")] // too many parts
-    [InlineData("")]                   // empty string
-    [InlineData("  ")]                 // whitespace only
+    [InlineData("")]                   // empty string — caught by IsNullOrWhiteSpace guard
+    [InlineData("  ")]                 // whitespace only — caught by IsNullOrWhiteSpace guard
     public async Task Validate_WhenSortIsInvalid_ShouldFail(string sort)
     {
         await ShouldFailAsync(new GetPoliciesQuery(Sort: sort), "sort");

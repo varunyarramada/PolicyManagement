@@ -24,25 +24,16 @@ namespace PolicyManagement.Application.Features.Policies.Queries.GetPolicies;
 ///   <item><description>Map result entities to <see cref="PolicyDto"/> and wrap in <see cref="PagedPolicyResponse"/>.</description></item>
 /// </list>
 /// </para>
+/// <para>
+/// Line-of-business string → enum mapping is sourced from
+/// <see cref="GetPoliciesQueryValidator.LobParseMap"/> to keep a single source of truth.
+/// </para>
 /// </summary>
 public sealed class GetPoliciesQueryHandler(
     IPolicyRepository repository,
     ILogger<GetPoliciesQueryHandler> logger)
     : IRequestHandler<GetPoliciesQuery, PagedPolicyResponse>
 {
-    /// <summary>
-    /// Maps the API-facing line-of-business display strings (including <c>"A&amp;H"</c>)
-    /// to their domain enum equivalents.
-    /// </summary>
-    private static readonly IReadOnlyDictionary<string, LineOfBusiness> LobParseMap =
-        new Dictionary<string, LineOfBusiness>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Property"] = LineOfBusiness.Property,
-            ["Casualty"]  = LineOfBusiness.Casualty,
-            ["A&H"]       = LineOfBusiness.AH,
-            ["Marine"]    = LineOfBusiness.Marine,
-        };
-
     /// <inheritdoc/>
     public async Task<PagedPolicyResponse> Handle(
         GetPoliciesQuery query,
@@ -71,19 +62,24 @@ public sealed class GetPoliciesQueryHandler(
 
         var (items, totalCount) = await repository.GetPagedAsync(filter, cancellationToken);
 
-        logger.LogInformation(
-            "{Query} returned {Count}/{Total} policies (page {Page}/{TotalPages})",
-            nameof(GetPoliciesQuery),
-            items.Count,
-            totalCount,
-            query.Page,
-            PaginationMeta.Create(query.Page, query.Size, totalCount).TotalPages);
+        // Compute pagination once and reuse — avoids double allocation and keeps
+        // the log and return value guaranteed to be consistent.
+        var pagination = PaginationMeta.Create(query.Page, query.Size, totalCount);
 
         var dtos = items.Select(p => p.ToDto()).ToList().AsReadOnly();
 
-        return new PagedPolicyResponse(
-            Data:       dtos,
-            Pagination: PaginationMeta.Create(query.Page, query.Size, totalCount));
+        // Log after DTO mapping succeeds so the entry is only written when the
+        // response is fully constructed. Entry-level context (page/size/sort) is
+        // logged above; LoggingPipelineBehavior logs overall handler duration.
+        logger.LogInformation(
+            "{Query} returned {Count}/{Total} policies (page {Page}/{TotalPages})",
+            nameof(GetPoliciesQuery),
+            dtos.Count,
+            totalCount,
+            query.Page,
+            pagination.TotalPages);
+
+        return new PagedPolicyResponse(Data: dtos, Pagination: pagination);
     }
 
     /// <summary>
@@ -127,15 +123,16 @@ public sealed class GetPoliciesQueryHandler(
 
     /// <summary>
     /// Parses an optional line-of-business string (including <c>"A&amp;H"</c>) to its
-    /// <see cref="LineOfBusiness"/> equivalent.
+    /// <see cref="LineOfBusiness"/> equivalent using the shared
+    /// <see cref="GetPoliciesQueryValidator.LobParseMap"/>.
     /// Returns <see langword="null"/> when the input is absent.
-    /// Validation has already confirmed the value is in <see cref="LobParseMap"/> if present.
+    /// Validation has already confirmed the value is in the map if present.
     /// </summary>
     private static LineOfBusiness? ParseLineOfBusiness(string? lob)
     {
         if (string.IsNullOrWhiteSpace(lob))
             return null;
 
-        return LobParseMap.TryGetValue(lob, out var value) ? value : null;
+        return GetPoliciesQueryValidator.LobParseMap.TryGetValue(lob, out var value) ? value : null;
     }
 }

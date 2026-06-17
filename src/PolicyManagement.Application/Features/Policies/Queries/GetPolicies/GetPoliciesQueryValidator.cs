@@ -12,16 +12,21 @@ namespace PolicyManagement.Application.Features.Policies.Queries.GetPolicies;
 public sealed class GetPoliciesQueryValidator : AbstractValidator<GetPoliciesQuery>
 {
     /// <summary>
-    /// Valid line-of-business display strings accepted by the API.
-    /// "A&amp;H" maps to <see cref="LineOfBusiness.AH"/> — enum name cannot be used directly.
+    /// Maps the API-facing line-of-business display strings (including <c>"A&amp;H"</c>)
+    /// to their domain enum equivalents.
+    /// <para>
+    /// Defined here (not in the handler) so that both the validator and handler share a
+    /// single source of truth — adding a new line of business requires updating only this map.
+    /// The handler references this field directly: <see cref="GetPoliciesQueryHandler"/>.
+    /// </para>
     /// </summary>
-    private static readonly IReadOnlySet<string> ValidLineOfBusinessValues =
-        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    internal static readonly IReadOnlyDictionary<string, LineOfBusiness> LobParseMap =
+        new Dictionary<string, LineOfBusiness>(StringComparer.OrdinalIgnoreCase)
         {
-            "Property",
-            "Casualty",
-            "A&H",
-            "Marine",
+            ["Property"] = LineOfBusiness.Property,
+            ["Casualty"]  = LineOfBusiness.Casualty,
+            ["A&H"]       = LineOfBusiness.AH,
+            ["Marine"]    = LineOfBusiness.Marine,
         };
 
     /// <summary>Initialises all validation rules.</summary>
@@ -38,7 +43,10 @@ public sealed class GetPoliciesQueryValidator : AbstractValidator<GetPoliciesQue
 
         // ---- Sort ----
         RuleFor(q => q.Sort)
+            .Must(s => !string.IsNullOrWhiteSpace(s))
+            .WithMessage("'sort' must not be empty or whitespace. Default: 'createdAt,desc'.")
             .Must(BeAValidSortExpression)
+            .When(q => !string.IsNullOrWhiteSpace(q.Sort), ApplyConditionTo.CurrentValidator)
             .WithMessage(
                 q => $"'sort' value '{q.Sort}' is invalid. " +
                      $"Expected format: 'fieldName[,asc|desc]'. " +
@@ -52,10 +60,10 @@ public sealed class GetPoliciesQueryValidator : AbstractValidator<GetPoliciesQue
                      $"Allowed values: {string.Join(", ", Enum.GetNames<PolicyStatus>())}.");
 
         RuleFor(q => q.LineOfBusiness)
-            .Must(lob => lob == null || ValidLineOfBusinessValues.Contains(lob))
+            .Must(lob => lob == null || LobParseMap.ContainsKey(lob))
             .WithMessage(
                 q => $"'lineOfBusiness' value '{q.LineOfBusiness}' is not valid. " +
-                     $"Allowed values: {string.Join(", ", ValidLineOfBusinessValues.Order())}.");
+                     $"Allowed values: {string.Join(", ", LobParseMap.Keys.Order())}.");
 
         RuleFor(q => q.Region)
             .Must(r => r == null || Regions.IsValid(r))
@@ -73,12 +81,10 @@ public sealed class GetPoliciesQueryValidator : AbstractValidator<GetPoliciesQue
     /// <summary>
     /// Returns <see langword="true"/> when <paramref name="sort"/> is a valid sort expression.
     /// A valid expression is <c>fieldName</c> or <c>fieldName,asc|desc</c> (case-insensitive).
+    /// Only called when <paramref name="sort"/> is non-empty (guarded by the <c>When</c> condition).
     /// </summary>
     private static bool BeAValidSortExpression(string sort)
     {
-        if (string.IsNullOrWhiteSpace(sort))
-            return false;
-
         var parts = sort.Split(',', StringSplitOptions.TrimEntries);
 
         if (parts.Length > 2)
