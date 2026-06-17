@@ -81,6 +81,53 @@ This document analyses the requirements for the **PolicyManagement Backend-for-F
 
 ---
 
+## Authentication & Authorization Requirements
+
+> **Added 2026-06-17.** Supersedes assumption A-01. See [ADR-007](../architecture/decisions/ADR-007-jwt-bearer-authentication.md) for full decision rationale.
+
+### Roles
+
+| Role | Description | Granted to |
+|------|-------------|------------|
+| `Policy.Read` | Read access to all policy data. Implicit for any authenticated user with a valid JWT token. | All authenticated users |
+| `Policy.Write` | Write access — flag policies for review. Explicit role claim required. Users without this role receive `403 Forbidden`. | Underwriters and administrators |
+
+### Endpoint Authorization Matrix
+
+| Endpoint | Auth required | Role required | `401` when | `403` when |
+|----------|--------------|---------------|------------|------------|
+| `GET /api/v1/policies` | Yes | None (any valid token) | No token or invalid token | N/A |
+| `GET /api/v1/policies/{id}` | Yes | None (any valid token) | No token or invalid token | N/A |
+| `GET /api/v1/policies/summary` | Yes | None (any valid token) | No token or invalid token | N/A |
+| `PATCH /api/v1/policies/flag` | Yes | `Policy.Write` | No token or invalid token | Valid token but missing `Policy.Write` role |
+
+### Identity Provider
+
+- **Keycloak** — self-hosted, free, Apache 2.0 licensed
+- See [ADR-007](../architecture/decisions/ADR-007-jwt-bearer-authentication.md) for full decision rationale and alternatives considered
+- Realm: `policymanagement`
+- Client: `policymanagement-api`
+- Runs as a Docker container alongside SQL Server via `docker-compose up`
+
+### Application Abstraction
+
+- `ICurrentUserService` is defined in the `Application` layer (`PolicyManagement.Application/Interfaces/`)
+- Returns `UserId`, `Email`, and `Roles` extracted from validated JWT claims
+- Implemented in the `API` layer using `IHttpContextAccessor` — never referenced in `Domain` or `Application` directly
+- All handlers that require user identity inject `ICurrentUserService` — they never access `HttpContext.User` directly
+- This preserves the Clean Architecture dependency rule (ADR-001): `Application` has zero dependency on ASP.NET Core types
+
+### New HTTP Status Codes (all endpoints)
+
+| Status | Condition |
+|--------|-----------|
+| `401 Unauthorized` | JWT token is absent, expired, has an invalid signature, or has an incorrect issuer/audience |
+| `403 Forbidden` | Token is valid and authenticated but the caller lacks the required role (`Policy.Write` on `PATCH /flag` only) |
+
+Both `401` and `403` responses are returned as RFC 7807 `ProblemDetails` with `application/problem+json` content type, consistent with all other error responses (FR-26).
+
+---
+
 ## Risks
 
 | ID | Risk | Likelihood | Impact | Mitigation |
@@ -100,7 +147,7 @@ This document analyses the requirements for the **PolicyManagement Backend-for-F
 
 ## Assumptions
 
-- **A-01**: The assessment does not require authentication or authorisation (no JWT, no OAuth). All endpoints are accessible without credentials. If authentication is added in future, it will be introduced as a new requirement.
+- **A-01**: ~~The assessment does not require authentication or authorisation (no JWT, no OAuth). All endpoints are accessible without credentials. If authentication is added in future, it will be introduced as a new requirement.~~ **Superseded by ADR-007.** All endpoints require JWT Bearer authentication. The `PATCH /flag` endpoint requires the `Policy.Write` role. Read endpoints require a valid token but no specific role. See "Authentication & Authorization Requirements" section below.
 - **A-02**: The BFF does not call any downstream HTTP services in the current implementation. The `HttpClients/` folder in Infrastructure is reserved for future integrations only. All data is served from the local SQL Server database.
 - **A-03**: The policy data model is flat — there are no parent-child policy relationships, policy riders, or endorsements required by the assessment.
 - **A-04**: `decimal(18,2)` is used uniformly for `premiumAmount` across all currencies, including JPY (which conventionally has no fractional units). This is an assessment simplification.
@@ -173,3 +220,11 @@ The following deliverables are required by the assessment. Each is tracked here 
 | D-04 | AI working journal — prompt log showing what was accepted, challenged, and overridden, with brief reasoning | Committed as a running notes file alongside code; does not need to be polished |
 | D-05 | Supporting documentation — architecture decisions, design rationale, trade-off analysis, diagrams | Recommended: ADRs, C4 diagrams, this analysis document |
 | D-06 | 30–60 minute walkthrough with the hiring panel | Four segments: presentation (15–20 min), panel Q&A (10–15 min), "what next" (10 min), candidate questions (5 min) |
+
+---
+
+## Change Log
+
+| Date | Change | Reason |
+|------|--------|--------|
+| 2026-06-17 | Superseded assumption A-01. Added Authentication & Authorization Requirements section. | ADR-007 accepted. Policy data requires access control. Original A-01 was an assessment simplification. |
