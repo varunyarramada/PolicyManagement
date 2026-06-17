@@ -1,0 +1,622 @@
+openapi: 3.0.3
+
+info:
+  title: PolicyManagement BFF API
+  version: 1.0.0
+  description: >
+    Backend-for-Frontend service for Chubb APAC Policy Management Dashboard.
+    Provides policy listing, detail, bulk-flag, and summary aggregation endpoints
+    across eight APAC regions and four lines of business.
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Policies
+    description: Policy management operations
+
+paths:
+  /api/v1/policies:
+    get:
+      tags:
+        - Policies
+      summary: List policies with filtering, sorting, and pagination
+      description: >
+        Returns a paginated list of policies. Supports filtering by status,
+        line of business, region, effective date range, and free-text search.
+        Multiple filters are combined with AND logic.
+      operationId: getPolicies
+      parameters:
+        - name: page
+          in: query
+          description: 1-based page number
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          description: Number of records per page
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: sort
+          in: query
+          description: >
+            Sort field and direction as comma-separated string
+            (e.g., `premiumAmount,desc`). Allowed fields: policyNumber, status,
+            premiumAmount, effectiveDate, expiryDate, createdAt, policyholderName.
+            Default: `createdAt,desc`
+          required: false
+          schema:
+            type: string
+            default: createdAt,desc
+        - name: status
+          in: query
+          description: Filter by policy status
+          required: false
+          schema:
+            type: string
+            enum:
+              - Active
+              - Expired
+              - Pending
+              - Cancelled
+        - name: lineOfBusiness
+          in: query
+          description: Filter by line of business
+          required: false
+          schema:
+            type: string
+            enum:
+              - Property
+              - Casualty
+              - A&H
+              - Marine
+        - name: region
+          in: query
+          description: Filter by APAC region
+          required: false
+          schema:
+            type: string
+            enum:
+              - Singapore
+              - Hong Kong
+              - Australia
+              - Japan
+              - Thailand
+              - Indonesia
+              - Malaysia
+              - Philippines
+        - name: effectiveDateFrom
+          in: query
+          description: Start of effective date range filter (inclusive)
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: effectiveDateTo
+          in: query
+          description: End of effective date range filter (inclusive)
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: search
+          in: query
+          description: >
+            Case-insensitive substring search across policy number,
+            policyholder name, and underwriter name
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response with paginated policy list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedPolicyResponse'
+        '400':
+          description: Bad request — invalid query parameters
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '401':
+          description: Unauthorized — missing or invalid JWT Bearer token
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal server error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /api/v1/policies/{id}:
+    get:
+      tags:
+        - Policies
+      summary: Get policy by ID
+      description: Returns a single policy by its unique identifier (UUID)
+      operationId: getPolicyById
+      parameters:
+        - name: id
+          in: path
+          description: Policy UUID
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful response with policy details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyDto'
+        '400':
+          description: Bad request — invalid UUID format
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '401':
+          description: Unauthorized — missing or invalid JWT Bearer token
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Not found — policy with given ID does not exist or is soft-deleted
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal server error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /api/v1/policies/summary:
+    get:
+      tags:
+        - Policies
+      summary: Get policy summary statistics
+      description: >
+        Returns aggregated statistics across all non-deleted policies,
+        including counts by status, region, and line of business, plus
+        premium totals by currency. Response is cached with a 1-minute TTL.
+      operationId: getPolicySummary
+      responses:
+        '200':
+          description: Successful response with aggregated policy statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicySummaryResponse'
+        '401':
+          description: Unauthorized — missing or invalid JWT Bearer token
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal server error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /api/v1/policies/flag:
+    patch:
+      tags:
+        - Policies
+      summary: Bulk-flag policies for review
+      description: >
+        Flags a batch of policies for review. The operation is atomic — all
+        policies are flagged in a single transaction or none are. Requires
+        the Policy.Write role.
+      operationId: flagPolicies
+      requestBody:
+        description: Array of policy UUIDs to flag
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FlagPoliciesRequest'
+      responses:
+        '204':
+          description: No content — policies successfully flagged
+        '400':
+          description: >
+            Bad request — empty array, exceeds 100 items, or contains
+            invalid UUIDs
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '401':
+          description: Unauthorized — missing or invalid JWT Bearer token
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Forbidden — valid token but missing Policy.Write role
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Not found — one or more policy IDs do not exist
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: Conflict — one or more policies are already flagged for review
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal server error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        JWT Bearer token issued by Keycloak. Include in the Authorization
+        header as: Bearer {token}. All endpoints require a valid token.
+        The PATCH /flag endpoint additionally requires the Policy.Write role.
+
+  schemas:
+    PolicyDto:
+      type: object
+      description: Represents a single insurance policy
+      required:
+        - id
+        - policyNumber
+        - policyholderName
+        - lineOfBusiness
+        - status
+        - premiumAmount
+        - currency
+        - effectiveDate
+        - expiryDate
+        - region
+        - underwriter
+        - flaggedForReview
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Policy unique identifier
+        policyNumber:
+          type: string
+          pattern: '^POL-[0-9]{6}$'
+          description: Policy number in format POL-XXXXXX
+        policyholderName:
+          type: string
+          description: Name of the policyholder
+        lineOfBusiness:
+          type: string
+          enum:
+            - Property
+            - Casualty
+            - A&H
+            - Marine
+          description: Insurance line of business
+        status:
+          type: string
+          enum:
+            - Active
+            - Expired
+            - Pending
+            - Cancelled
+          description: Current policy status
+        premiumAmount:
+          type: number
+          format: double
+          minimum: 1000
+          maximum: 5000000
+          description: Policy premium amount (range 1,000 to 5,000,000)
+        currency:
+          type: string
+          enum:
+            - USD
+            - SGD
+            - HKD
+            - AUD
+            - JPY
+            - THB
+          description: Premium currency code
+        effectiveDate:
+          type: string
+          format: date
+          description: Policy effective date in ISO 8601 date format (YYYY-MM-DD)
+        expiryDate:
+          type: string
+          format: date
+          description: Policy expiry date in ISO 8601 date format (YYYY-MM-DD)
+        region:
+          type: string
+          enum:
+            - Singapore
+            - Hong Kong
+            - Australia
+            - Japan
+            - Thailand
+            - Indonesia
+            - Malaysia
+            - Philippines
+          description: APAC region
+        underwriter:
+          type: string
+          description: Name of the underwriter
+        flaggedForReview:
+          type: boolean
+          description: Whether the policy is flagged for review
+        createdAt:
+          type: string
+          format: date-time
+          description: Policy creation timestamp with timezone offset
+        updatedAt:
+          type: string
+          format: date-time
+          description: Policy last update timestamp with timezone offset
+
+    PaginationMeta:
+      type: object
+      description: Pagination metadata
+      required:
+        - page
+        - size
+        - totalCount
+        - totalPages
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          description: Current page number (1-based)
+        size:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Number of records per page
+        totalCount:
+          type: integer
+          minimum: 0
+          description: Total number of matching records
+        totalPages:
+          type: integer
+          minimum: 0
+          description: Total number of pages (ceil(totalCount / size))
+
+    PagedPolicyResponse:
+      type: object
+      description: Paginated list of policies
+      required:
+        - data
+        - pagination
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyDto'
+          description: Array of policy records for the current page
+        pagination:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    PolicySummaryResponse:
+      type: object
+      description: Aggregated policy statistics
+      required:
+        - totalCount
+        - flaggedCount
+        - expiringSoonCount
+        - countByStatus
+        - countByRegion
+        - countByLineOfBusiness
+        - premiumTotalByCurrency
+      properties:
+        totalCount:
+          type: integer
+          minimum: 0
+          description: Total count of all non-deleted policies
+        flaggedCount:
+          type: integer
+          minimum: 0
+          description: Count of policies flagged for review
+        expiringSoonCount:
+          type: integer
+          minimum: 0
+          description: >
+            Count of Active policies expiring within the next 30 calendar days
+            from the current UTC date
+        countByStatus:
+          type: object
+          description: Policy count grouped by status
+          required:
+            - Active
+            - Expired
+            - Pending
+            - Cancelled
+          properties:
+            Active:
+              type: integer
+              minimum: 0
+            Expired:
+              type: integer
+              minimum: 0
+            Pending:
+              type: integer
+              minimum: 0
+            Cancelled:
+              type: integer
+              minimum: 0
+        countByRegion:
+          type: object
+          description: Policy count grouped by APAC region
+          required:
+            - Singapore
+            - Hong Kong
+            - Australia
+            - Japan
+            - Thailand
+            - Indonesia
+            - Malaysia
+            - Philippines
+          properties:
+            Singapore:
+              type: integer
+              minimum: 0
+            Hong Kong:
+              type: integer
+              minimum: 0
+            Australia:
+              type: integer
+              minimum: 0
+            Japan:
+              type: integer
+              minimum: 0
+            Thailand:
+              type: integer
+              minimum: 0
+            Indonesia:
+              type: integer
+              minimum: 0
+            Malaysia:
+              type: integer
+              minimum: 0
+            Philippines:
+              type: integer
+              minimum: 0
+        countByLineOfBusiness:
+          type: object
+          description: Policy count grouped by line of business
+          required:
+            - Property
+            - Casualty
+            - A&H
+            - Marine
+          properties:
+            Property:
+              type: integer
+              minimum: 0
+            Casualty:
+              type: integer
+              minimum: 0
+            A&H:
+              type: integer
+              minimum: 0
+            Marine:
+              type: integer
+              minimum: 0
+        premiumTotalByCurrency:
+          type: object
+          description: >
+            Sum of premium amounts grouped by currency. Only currencies
+            with at least one policy are included.
+          properties:
+            USD:
+              type: number
+              format: double
+              minimum: 0
+            SGD:
+              type: number
+              format: double
+              minimum: 0
+            HKD:
+              type: number
+              format: double
+              minimum: 0
+            AUD:
+              type: number
+              format: double
+              minimum: 0
+            JPY:
+              type: number
+              format: double
+              minimum: 0
+            THB:
+              type: number
+              format: double
+              minimum: 0
+
+    FlagPoliciesRequest:
+      type: object
+      description: Request body for bulk-flagging policies
+      required:
+        - policyIds
+      properties:
+        policyIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          description: >
+            Array of policy UUIDs to flag. Minimum 1, maximum 100 items.
+            No duplicates allowed.
+
+    ProblemDetails:
+      type: object
+      description: RFC 7807 Problem Details for HTTP APIs
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri
+          description: URI reference identifying the problem type
+        title:
+          type: string
+          description: Short, human-readable summary of the problem
+        status:
+          type: integer
+          description: HTTP status code
+        detail:
+          type: string
+          description: Human-readable explanation specific to this occurrence
+        instance:
+          type: string
+          format: uri
+          description: URI reference identifying the specific occurrence
+        correlationId:
+          type: string
+          description: Request correlation ID for log tracing
+        errors:
+          type: object
+          description: Field-level validation errors (present on 400 Bad Request only)
+          additionalProperties:
+            type: array
+            items:
+              type: string
