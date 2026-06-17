@@ -1,0 +1,128 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# PolicyManagement BFF — Local Development Stack
+#
+# Prerequisites:
+#   1. Copy .env.example to .env and fill in real values.
+#   2. Run:  docker compose up --build
+#   3. After first start, configure the Keycloak realm (see keycloak/README.md).
+#
+# Service ports (host):
+#   • API       → http://localhost:8080
+#   • Keycloak  → http://localhost:8081
+#   • SQL Server → localhost:1433
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── SQL Server 2022 ────────────────────────────────────────────────────────
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: policymanagement-db
+    environment:
+      SA_PASSWORD: ${SA_PASSWORD}
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Express
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    healthcheck:
+      # Use sqlcmd to verify SQL Server is accepting connections.
+      # -No disables TLS certificate validation for the local loopback connection.
+      test:
+        [
+          "CMD",
+          "/opt/mssql-tools18/bin/sqlcmd",
+          "-S", "localhost",
+          "-U", "sa",
+          "-P", "${SA_PASSWORD}",
+          "-Q", "SELECT 1",
+          "-b",
+          "-No"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - policymanagement-network
+    restart: unless-stopped
+
+  # ── Keycloak 24.0 identity provider ───────────────────────────────────────
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: policymanagement-keycloak
+    # start-dev: HTTP-only development mode (no TLS, no clustering).
+    # --import-realm: auto-import any JSON files in /opt/keycloak/data/import/
+    #   on first start. If the realm already exists, the import is skipped.
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+    volumes:
+      # Realm seed: provides the policymanagement realm, client, roles, and dev users.
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+      - keycloak_data:/opt/keycloak/data
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health/ready"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - policymanagement-network
+    restart: unless-stopped
+
+  # ── PolicyManagement BFF API ────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: policymanagement-api
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      # SQL Server connection string — supplied from .env, never hardcoded.
+      ConnectionStrings__DefaultConnection: ${ConnectionStrings__DefaultConnection}
+      # JWT Bearer: Keycloak realm URL uses the internal Docker network hostname.
+      # The BFF resolves "keycloak" via Docker DNS — do NOT use localhost:8081 here.
+      Jwt__Authority: http://keycloak:8080/realms/policymanagement
+      # Client ID registered in Keycloak (must match realm-export.json).
+      Jwt__Audience: policymanagement-api
+      # HTTPS is not required for the local Keycloak dev server.
+      # MUST be true in staging/production where Keycloak is behind TLS.
+      Jwt__RequireHttpsMetadata: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - policymanagement-network
+    restart: unless-stopped
+
+# ── Named volumes ──────────────────────────────────────────────────────────────
+volumes:
+  sqlserver_data:
+    driver: local
+  keycloak_data:
+    driver: local
+
+# ── Network ────────────────────────────────────────────────────────────────────
+networks:
+  policymanagement-network:
+    driver: bridge

@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  DOTNET_VERSION: "10.0.x"
+  # Suppress dotnet CLI welcome message and telemetry in CI
+  DOTNET_NOLOGO: "true"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+
+jobs:
+
+  # ── Job 1: Restore & Build ───────────────────────────────────────────────────
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore NuGet packages
+        run: dotnet restore PolicyManagement.sln
+
+      - name: Build (Release)
+        run: dotnet build PolicyManagement.sln --no-restore --configuration Release
+
+  # ── Job 2: Test ──────────────────────────────────────────────────────────────
+  # Integration tests use EF Core InMemory provider — no SQL Server container needed.
+  # Authentication tests use JwtTokenFactory with a symmetric test key — no Keycloak
+  # service container needed. CI remains fast and free of external service dependencies.
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore NuGet packages
+        run: dotnet restore PolicyManagement.sln
+
+      - name: Run all tests
+        run: |
+          dotnet test PolicyManagement.sln \
+            --no-restore \
+            --configuration Release \
+            --logger trx \
+            --results-directory TestResults \
+            --collect:"XPlat Code Coverage"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults/
+          retention-days: 14
+
+  # ── Job 3: Docker Image Build ─────────────────────────────────────────────────
+  # Builds the production Docker image and verifies it was created successfully.
+  # Only runs after all tests pass; does not push to any registry.
+  docker:
+    name: Docker Image Build
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t policymanagement-api:ci .
+
+      - name: Verify image was created successfully
+        run: docker image inspect policymanagement-api:ci --format '{{.Id}} created {{.Created}}'
