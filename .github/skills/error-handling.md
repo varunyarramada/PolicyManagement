@@ -185,6 +185,8 @@ public sealed class InvalidPolicyStateException : DomainException
 | Exception type | HTTP status | When thrown |
 |---|---|---|
 | `ValidationException` (FluentValidation) | `400 Bad Request` | `ValidationPipelineBehavior` — input fails validation rules |
+| `401 Unauthorized` | `401 Unauthorized` | JWT token missing, expired, invalid signature, wrong issuer/audience — returned by JWT Bearer middleware via `OnChallenge` event, **not** by application code |
+| `403 Forbidden` | `403 Forbidden` | Valid JWT token but user lacks required role (e.g., `Policy.Write`) — returned by authorization middleware via `OnForbidden` event, **not** by application code |
 | `PolicyNotFoundException` | `404 Not Found` | Handler — policy ID does not exist in the database |
 | `InvalidPolicyStateException` | `409 Conflict` | Handler — domain invariant violated (e.g., already flagged) |
 | `DomainException` (any unrecognised subclass) | `422 Unprocessable Entity` | Handler — any other domain rule failure |
@@ -349,17 +351,108 @@ public sealed class GlobalExceptionMiddleware
 }
 ```
 
-Register the middleware as the **first** middleware in the pipeline — before routing, authentication, and all other middleware — so it catches exceptions from every layer:
+### Middleware Pipeline Order
+
+`GlobalExceptionMiddleware` must be registered **before** `UseAuthentication()` in the pipeline. This ensures that JWT validation failures (`401`) and authorization failures (`403`) are caught and returned as `ProblemDetails`, not as bare ASP.NET Core challenge responses.
+
+The correct middleware order is:
 
 ```csharp
 // API/Program.cs
-app.UseMiddleware<GlobalExceptionMiddleware>(); // must be first
-
-app.UseRouting();
-app.UseAuthentication();
-app.UseAuthorization();
-app.MapControllers();
+app.UseMiddleware<CorrelationIdMiddleware>();      // 1. First — sets correlation ID for all logs
+app.UseMiddleware<GlobalExceptionMiddleware>();   // 2. Second — catches all exceptions
+app.UseAuthentication();                          // 3. Third — validates JWT token
+app.UseAuthorization();                           // 4. Fourth — evaluates [Authorize] policies
+app.MapControllers();                             // 5. Fifth — routes to controller actions
 ```
+
+**Why this order?**
+
+- `CorrelationIdMiddleware` goes first so that the correlation ID is available in all downstream middleware and handlers.
+- `GlobalExceptionMiddleware` goes before authentication so that auth failures (which would otherwise return bare `401`/`403` responses) are intercepted and formatted as `ProblemDetails`.
+- `UseAuthentication()` validates the JWT token and populates `HttpContext.User`.
+- `UseAuthorization()` evaluates `[Authorize]` attributes and policy requirements.
+- `MapControllers()` routes requests to controller actions.
+
+**Critical:** If `GlobalExceptionMiddleware` is placed after `UseAuthentication()`, then `401` and `403` responses will bypass the middleware and return as bare status codes with no `ProblemDetails` body.
+
+---
+
+## JwtBearerEvents — Auth Error Formatting
+
+ASP.NET Core's default JWT Bearer authentication returns bare `401`/`403` responses with no body. To return `ProblemDetails` for authentication and authorization failures, override the `JwtBearerEvents` in `Program.cs`:
+
+```csharp
+// API/Program.cs — inside AddJwtBearer configuration
+.AddJwtBearer(options =>
+{
+    // ... Authority, Audience, TokenValidationParameters ...
+
+    options.Events = new JwtBearerEvents
+    {
+        OnChallenge = async context =>
+        {
+            // Suppress the default 401 response
+            context.HandleResponse();
+
+            var correlationId = context.HttpContext.Request.Headers.TryGetValue(
+                "X-Correlation-Id", out var id) && !string.IsNullOrWhiteSpace(id)
+                ? id.ToString()
+                : context.HttpContext.TraceIdentifier;
+
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            context.Response.ContentType = "application/problem+json";
+
+            var problem = new ProblemDetails
+            {
+                Type = "https://tools.ietf.org/html/rfc7235#section-3.1",
+                Title = "Unauthorized",
+                Status = StatusCodes.Status401Unauthorized,
+                Detail = "A valid JWT Bearer token is required.",
+                Instance = context.Request.Path
+            };
+            problem.Extensions["correlationId"] = correlationId;
+
+            // WWW-Authenticate header is set automatically by JWT Bearer middleware
+            await context.Response.WriteAsJsonAsync(problem);
+        },
+
+        OnForbidden = async context =>
+        {
+            var correlationId = context.HttpContext.Request.Headers.TryGetValue(
+                "X-Correlation-Id", out var id) && !string.IsNullOrWhiteSpace(id)
+                ? id.ToString()
+                : context.HttpContext.TraceIdentifier;
+
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            context.Response.ContentType = "application/problem+json";
+
+            var problem = new ProblemDetails
+            {
+                Type = "https://tools.ietf.org/html/rfc7231#section-6.5.3",
+                Title = "Forbidden",
+                Status = StatusCodes.Status403Forbidden,
+                Detail = "You do not have permission to perform this action.",
+                Instance = context.Request.Path
+            };
+            problem.Extensions["correlationId"] = correlationId;
+
+            await context.Response.WriteAsJsonAsync(problem);
+        }
+    };
+});
+```
+
+### Rules for Auth Error Responses
+
+- **401 responses** are returned when the JWT token is absent, expired, has an invalid signature, or has the wrong issuer/audience.
+- **403 responses** are returned when the token is valid and the user is authenticated, but the user lacks the required role (e.g., `Policy.Write` on `PATCH /api/v1/policies/flag`).
+- Both `401` and `403` responses **must** include the `correlationId` extension field.
+- Stack traces are **never** exposed in `401` or `403` responses.
+- `401` responses must include the `WWW-Authenticate: Bearer` header — this is set automatically by the JWT Bearer middleware.
+- Both responses use `application/problem+json` content type with `ProblemDetails` schema.
+
+See [ADR-007](../../docs/architecture/decisions/ADR-007-jwt-bearer-authentication.md) for the authentication decision rationale and [authentication.md](authentication.md) for full JWT Bearer setup guidance.
 
 ---
 
@@ -545,3 +638,71 @@ public async Task<PagedResponse<PolicyDto>> Handle(GetPoliciesQuery query, Cance
 ```
 
 Domain exceptions are part of the domain model. Application and Infrastructure layers throw them; they do not define them.
+
+---
+
+### Throwing exceptions for authentication failures
+
+```csharp
+// WRONG — do NOT throw exceptions for authentication failures in handlers
+public async Task<PolicyDto> Handle(GetPolicyByIdQuery query, CancellationToken ct)
+{
+    if (string.IsNullOrEmpty(_currentUser.UserId))
+        throw new UnauthorizedException("User is not authenticated."); // wrong layer
+    // ...
+}
+
+// CORRECT — authentication is enforced by [Authorize] on the controller
+// Handlers assume a valid authenticated user is present
+[Authorize]  // on controller class — enforces authentication before handler runs
+public sealed class PoliciesController : ControllerBase { ... }
+```
+
+Authentication failures (`401`) are handled automatically by the JWT Bearer middleware via `OnChallenge`. Application code never throws exceptions for authentication failures.
+
+---
+
+### Throwing exceptions for authorization failures
+
+```csharp
+// WRONG — do NOT throw exceptions for authorization failures in handlers
+public async Task Handle(FlagPoliciesCommand command, CancellationToken ct)
+{
+    if (!_currentUser.IsInRole("Policy.Write"))
+        throw new ForbiddenException("User lacks Policy.Write role."); // wrong layer
+    // ...
+}
+
+// CORRECT — authorization is enforced by [Authorize(Policy = "PolicyWrite")] on the action
+[Authorize(Policy = "PolicyWrite")]  // on action — enforces role before handler runs
+public async Task<IActionResult> Flag([FromBody] FlagPoliciesCommand command, CancellationToken ct)
+{
+    await _mediator.Send(command, ct);
+    return NoContent();
+}
+```
+
+Authorization failures (`403`) are handled automatically by the authorization middleware via `OnForbidden`. Handlers never check roles or throw authorization exceptions.
+
+---
+
+### Returning bare 401/403 status codes without ProblemDetails
+
+```csharp
+// WRONG — returning bare status codes bypasses the ProblemDetails format
+if (userNotAuthenticated)
+    return Unauthorized(); // returns 401 with no body
+
+if (userLacksRole)
+    return Forbid(); // returns 403 with no body
+
+// CORRECT — override JwtBearerEvents.OnChallenge and OnForbidden in Program.cs
+// These events ensure 401 and 403 are returned as ProblemDetails
+options.Events = new JwtBearerEvents
+{
+    OnChallenge = async context => { /* return ProblemDetails */ },
+    OnForbidden = async context => { /* return ProblemDetails */ }
+};
+```
+
+All error responses — including `401` and `403` — must be `ProblemDetails`. Never return raw status codes.
