@@ -46,14 +46,16 @@ app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
     Predicate      = _ => false,    // no checks — if the app is responding, it's alive
     ResponseWriter = WriteHealthResponse
-});
+});  // Do NOT add .RequireAuthorization() — health checks must be accessible without auth
 
 app.MapHealthChecks("/health/ready", new HealthCheckOptions
 {
     Predicate      = check => check.Tags.Contains("ready"),
     ResponseWriter = WriteHealthResponse
-});
+});  // Do NOT add .RequireAuthorization() — health checks must be accessible without auth
 ```
+
+**Critical:** Health check endpoints (`/health/live`, `/health/ready`) **must NOT** require authentication. They are infrastructure endpoints for container orchestration (Kubernetes liveness/readiness probes, Docker healthchecks). Never add `.RequireAuthorization()` to health check endpoint mappings. If the API requires authentication globally, health checks must be explicitly excluded from the authentication requirement.
 
 Response writer — returns JSON without exposing internal connection details:
 
@@ -287,7 +289,8 @@ ASP.NET Core's configuration system automatically maps `__`-separated environmen
 |---|---|---|
 | Connection strings | `Server=prod-sql;Password=...` | Environment variable or secrets manager |
 | API keys | External service API keys | Environment variable or secrets manager |
-| Signing keys | JWT signing secrets | Environment variable or secrets manager |
+| JWT configuration | `Jwt__Authority`, `Jwt__Audience` | Environment variable or secrets manager |
+| Signing keys | JWT signing secrets, symmetric keys | Environment variable or secrets manager |
 | Certificates | TLS private keys | Mounted volume or secrets manager |
 
 For local development, use `dotnet user-secrets` — never `appsettings.Development.json` for actual secret values:
@@ -296,6 +299,96 @@ For local development, use `dotnet user-secrets` — never `appsettings.Developm
 dotnet user-secrets set "SqlServer:ConnectionString" "Server=(localdb)\\mssqllocaldb;..."
     --project src/PolicyManagement.API
 ```
+
+### JWT Configuration
+
+JWT configuration (Keycloak authority URL, audience, HTTPS enforcement) must be supplied via environment variables only. No JWT secrets or signing keys may appear in source code or `appsettings.json`.
+
+**Required environment variables:**
+
+| Variable | Description | Example (Development) | Example (Production) |
+|----------|-------------|----------------------|---------------------|
+| `Jwt__Authority` | Keycloak realm URL | `http://keycloak:8080/realms/policymanagement` | `https://keycloak.prod.chubb.com/realms/policymanagement` |
+| `Jwt__Audience` | Keycloak client ID | `policymanagement-api` | `policymanagement-api` |
+| `Jwt__RequireHttpsMetadata` | HTTPS enforcement for OIDC discovery | `false` | `true` |
+
+**Registration with validation:**
+
+```csharp
+// API/Program.cs
+builder.Services.AddOptions<JwtOptions>()
+    .BindConfiguration(JwtOptions.SectionName)
+    .ValidateDataAnnotations()
+    .ValidateOnStart();   // Fails at startup — misconfiguration caught before first request
+```
+
+**Rules:**
+- `JwtOptions` class uses `[Required]` attributes on `Authority` and `Audience` properties.
+- `RequireHttpsMetadata` must be `true` in production — set to `false` only in local development when Keycloak runs on HTTP in Docker.
+- Startup fails immediately if any required JWT configuration is missing or invalid.
+- Never hardcode Keycloak URLs, client IDs, or secrets in source code or committed config files.
+
+See [ADR-007](../../docs/architecture/decisions/ADR-007-jwt-bearer-authentication.md) for the authentication decision and [authentication.md](authentication.md) for implementation details.
+
+---
+
+## Security
+
+### Authentication & Authorization
+
+All four API endpoints require JWT Bearer authentication. The `PATCH /api/v1/policies/flag` endpoint additionally requires the `Policy.Write` role.
+
+**Security requirements:**
+- All API endpoints require a valid JWT Bearer token (`401 Unauthorized` if missing or invalid).
+- `PATCH /flag` requires the `Policy.Write` role claim (`403 Forbidden` if missing).
+- Both `401` and `403` responses are returned as RFC 7807 `ProblemDetails` with `application/problem+json` content type.
+- Stack traces are **never** exposed in `401` or `403` responses.
+- Token validation parameters:
+  - `ValidateIssuer = true` — token must be issued by the configured Keycloak realm
+  - `ValidateAudience = true` — token audience must match the configured client ID
+  - `ValidateLifetime = true` — expired tokens are rejected
+  - `ValidateIssuerSigningKey = true` — token signature must be valid
+- `RoleClaimType` set to `"realm_access.roles"` for Keycloak compatibility.
+- No cookie authentication — JWT Bearer only. Never use `AddCookie()` or session state.
+
+**JWT Bearer Events — ProblemDetails formatting:**
+
+```csharp
+// API/Program.cs
+.AddJwtBearer(options =>
+{
+    // ... Authority, Audience, TokenValidationParameters ...
+
+    options.Events = new JwtBearerEvents
+    {
+        OnChallenge = async context =>
+        {
+            context.HandleResponse();  // Suppress default 401
+            // Return ProblemDetails with correlationId
+        },
+        OnForbidden = async context =>
+        {
+            // Return ProblemDetails with correlationId
+        }
+    };
+});
+```
+
+See [authentication.md](authentication.md) for complete implementation guidance.
+
+### Security Headers
+
+Production deployments should include security headers. Add a middleware or use a reverse proxy to set:
+
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
+- `X-XSS-Protection: 1; mode=block`
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains` (HTTPS only)
+
+Never expose:
+- `Server` header (remove with `AddServerHeader = false` in Kestrel options)
+- `X-Powered-By` header
+- Detailed error messages with stack traces in production
 
 ---
 
@@ -508,13 +601,63 @@ All secrets and environment-specific values are supplied as environment variable
 # docker-compose.yml (development only — not for production)
 services:
   api:
+    depends_on:
+      - db
+      - keycloak  # BFF depends on Keycloak being available
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - SqlServer__ConnectionString=Server=db;Database=PolicyDb;User Id=sa;Password=${SA_PASSWORD};
       - Cache__DefaultTtlMinutes=5
+      - Jwt__Authority=http://keycloak:8080/realms/policymanagement
+      - Jwt__Audience=policymanagement-api
+      - Jwt__RequireHttpsMetadata=false
 ```
 
 Environment variable names use `__` as the section separator (maps to JSON path `SqlServer.ConnectionString`).
+
+### Keycloak Dependency
+
+**Critical:** Keycloak must be running and accessible before the BFF starts accepting requests. The BFF validates JWT tokens by fetching public keys from Keycloak's OIDC discovery endpoint at startup.
+
+**Startup sequence:**
+1. Keycloak container starts and initializes.
+2. Keycloak's OIDC discovery endpoint (`/.well-known/openid-configuration`) becomes available.
+3. BFF container starts.
+4. BFF fetches JWKS (JSON Web Key Set) from Keycloak during JWT Bearer configuration.
+5. BFF begins accepting HTTP requests.
+
+**In `docker-compose.yml`:**
+
+```yaml
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    depends_on:
+      keycloak:
+        condition: service_healthy  # Wait for Keycloak health check to pass
+      db:
+        condition: service_started
+    environment:
+      - Jwt__Authority=http://keycloak:8080/realms/policymanagement  # Internal Docker network URL
+```
+
+**Rules:**
+- `Jwt__Authority` in the BFF environment variables points to the Keycloak realm URL **inside the Docker network** (e.g., `http://keycloak:8080/...`, not `http://localhost:8081/...`).
+- The BFF must be able to reach Keycloak's OIDC discovery endpoint at startup — if Keycloak is unreachable, the BFF fails to start.
+- Use `depends_on` with `condition: service_healthy` to ensure Keycloak is ready before the BFF starts.
+- In production Kubernetes deployments, use readiness probes and init containers to enforce the same startup ordering.
 
 ### What must NOT be in the image
 
@@ -522,6 +665,163 @@ Environment variable names use `__` as the section separator (maps to JSON path 
 - API keys or secrets
 - `appsettings.Production.json` with real values
 - `.env` files with secrets
+
+---
+
+## Integration Testing with Authentication
+
+Integration tests use `WebApplicationFactory<Program>` to test the full HTTP request/response pipeline. Tests must **not** depend on a running Keycloak instance — JWT Bearer authentication is overridden with a test configuration that validates tokens signed with a known symmetric key.
+
+### Test JWT Token Factory
+
+Create a helper class to generate valid and invalid test tokens:
+
+```csharp
+// tests/PolicyManagement.API.Tests/Helpers/JwtTokenFactory.cs
+internal static class JwtTokenFactory
+{
+    public const string TestSigningKey = "test-signing-key-must-be-at-least-32-chars!!";
+    public const string TestIssuer = "test-issuer";
+    public const string TestAudience = "policymanagement-api";
+
+    public static string GenerateToken(
+        string userId = "test-user-id",
+        string email = "test@example.com",
+        string[]? roles = null)
+    {
+        var claims = new List<Claim>
+        {
+            new(JwtRegisteredClaimNames.Sub, userId),
+            new(JwtRegisteredClaimNames.Email, email),
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+        };
+
+        if (roles != null)
+            foreach (var role in roles)
+                claims.Add(new Claim("realm_access.roles", role));
+
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(TestSigningKey));
+        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+        var token = new JwtSecurityToken(
+            issuer: TestIssuer,
+            audience: TestAudience,
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(1),
+            signingCredentials: creds);
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    public static string GenerateExpiredToken()
+    {
+        var claims = new List<Claim> { new(JwtRegisteredClaimNames.Sub, "test-user-id") };
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(TestSigningKey));
+        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+        var token = new JwtSecurityToken(
+            issuer: TestIssuer,
+            audience: TestAudience,
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(-1),  // Expired 1 hour ago
+            signingCredentials: creds);
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+}
+```
+
+### WebApplicationFactory Override
+
+Override JWT Bearer configuration in the test factory:
+
+```csharp
+// tests/PolicyManagement.API.Tests/CustomWebApplicationFactory.cs
+public class CustomWebApplicationFactory : WebApplicationFactory<Program>
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.ConfigureServices(services =>
+        {
+            // Remove production JWT Bearer registration
+            var jwtDescriptor = services.SingleOrDefault(
+                d => d.ServiceType == typeof(IConfigureOptions<JwtBearerOptions>));
+            if (jwtDescriptor != null)
+                services.Remove(jwtDescriptor);
+
+            // Register test JWT Bearer with symmetric key
+            services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+                .AddJwtBearer(options =>
+                {
+                    options.TokenValidationParameters = new TokenValidationParameters
+                    {
+                        ValidateIssuer = true,
+                        ValidIssuer = JwtTokenFactory.TestIssuer,
+                        ValidateAudience = true,
+                        ValidAudience = JwtTokenFactory.TestAudience,
+                        ValidateLifetime = true,
+                        ValidateIssuerSigningKey = true,
+                        IssuerSigningKey = new SymmetricSecurityKey(
+                            Encoding.UTF8.GetBytes(JwtTokenFactory.TestSigningKey)),
+                        RoleClaimType = "realm_access.roles"
+                    };
+                });
+        });
+    }
+}
+```
+
+### Required Test Scenarios
+
+Every integration test suite must cover these authentication scenarios:
+
+| Scenario | Expected Result | Test |
+|----------|----------------|------|
+| No token provided | `401 Unauthorized` | Send request without `Authorization` header |
+| Expired token | `401 Unauthorized` | Use `JwtTokenFactory.GenerateExpiredToken()` |
+| Valid token, no specific role | `200 OK` on GET endpoints | Use `GenerateToken()` with no roles |
+| Valid token, no specific role | `403 Forbidden` on `PATCH /flag` | Use `GenerateToken()` with no roles, call `/flag` |
+| Valid token with `Policy.Write` role | `204 No Content` on `PATCH /flag` | Use `GenerateToken(roles: new[] { "Policy.Write" })` |
+
+**Example test:**
+
+```csharp
+[Fact]
+public async Task GetPolicies_WithoutToken_Returns401()
+{
+    // Arrange
+    var client = _factory.CreateClient();
+    // No Authorization header set
+
+    // Act
+    var response = await client.GetAsync("/api/v1/policies");
+
+    // Assert
+    response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>();
+    problem.Should().NotBeNull();
+    problem!.Status.Should().Be(401);
+}
+
+[Fact]
+public async Task FlagPolicies_WithValidTokenButNoRole_Returns403()
+{
+    // Arrange
+    var token = JwtTokenFactory.GenerateToken(roles: null);  // No Policy.Write role
+    var client = _factory.CreateClient();
+    client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+    var request = new { policyIds = new[] { Guid.NewGuid() } };
+
+    // Act
+    var response = await client.PatchAsJsonAsync("/api/v1/policies/flag", request);
+
+    // Assert
+    response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+}
+```
+
+See [authentication.md](authentication.md) Section 7 for complete integration test guidance.
 
 ---
 
@@ -605,15 +905,29 @@ await app.RunAsync();
 Before promoting any build to production, verify:
 
 - [ ] No connection strings, API keys, or secrets in any committed file
+- [ ] No JWT secrets, signing keys, or Keycloak credentials in source code or `appsettings.json`
 - [ ] `appsettings.Production.json` contains only safe defaults — all secrets supplied via environment variables
+- [ ] JWT configuration (`Jwt__Authority`, `Jwt__Audience`, `Jwt__RequireHttpsMetadata`) supplied via environment variables
+- [ ] `Jwt__RequireHttpsMetadata` is `true` in production
+- [ ] `JwtOptions` validated at startup with `ValidateOnStart()`
+- [ ] Token validation parameters: `ValidateIssuer`, `ValidateAudience`, `ValidateLifetime`, `ValidateIssuerSigningKey` all `true`
+- [ ] `RoleClaimType` set to `"realm_access.roles"` for Keycloak
 - [ ] Health check endpoints respond correctly (`/health/live`, `/health/ready`)
+- [ ] Health check endpoints do **not** require authentication (no `.RequireAuthorization()`)
 - [ ] Swagger UI is disabled (not reachable) in the production environment
 - [ ] `EnableSensitiveDataLogging()` is only called when `IsDevelopment()`
 - [ ] All `ILogger` calls use structured parameters — no string interpolation
 - [ ] `CancellationToken` is accepted and forwarded in all controller actions, handlers, and repository methods
 - [ ] Docker image runs as non-root user
+- [ ] Keycloak is running and accessible before BFF starts (use `depends_on` with health checks in Docker Compose)
+- [ ] `Jwt__Authority` points to Keycloak's internal Docker network URL, not localhost
 - [ ] Response compression is enabled
 - [ ] CORS policy uses explicit allowed origins — `AllowAnyOrigin` is not present
 - [ ] Options classes are validated at startup with `ValidateOnStart()`
 - [ ] Global exception middleware is the outermost middleware
+- [ ] `GlobalExceptionMiddleware` registered **before** `UseAuthentication()`
+- [ ] `JwtBearerEvents.OnChallenge` and `OnForbidden` return `ProblemDetails` (not bare status codes)
 - [ ] No stack traces or internal exception messages in any `ProblemDetails` response
+- [ ] Stack traces never exposed in `401` or `403` responses
+- [ ] Integration tests cover: no token (401), expired token (401), valid token without role (403 on `/flag`), valid token with role (success)
+- [ ] Integration tests do **not** depend on a running Keycloak instance (use test token factory)
