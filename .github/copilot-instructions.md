@@ -107,6 +107,76 @@ API  →  Application  →  Domain  ←  Infrastructure
 - Never expose stack traces or internal exception messages in API responses.
 - Define custom domain exception types in `Domain` (e.g., `PolicyNotFoundException`, `InvalidPolicyStateException`).
 
+### Authentication & Authorization
+
+> **Implementation details:** See `.github/skills/authentication.md` and [ADR-007](docs/architecture/decisions/ADR-007-jwt-bearer-authentication.md).
+
+#### JWT Bearer Authentication
+
+- All four API endpoints require a valid JWT Bearer token (`401 Unauthorized` if missing or invalid).
+- Use `Microsoft.AspNetCore.Authentication.JwtBearer` in the `API` project only. Never install auth packages in `Domain` or `Application`.
+- **Keycloak** is the identity provider (self-hosted, Docker, Apache 2.0 license). The BFF validates tokens — it never issues them.
+- Tokens are issued by Keycloak, validated by the BFF using the `Authority` (Keycloak realm URL) and `Audience` (client ID) from configuration.
+- Health check endpoints (`/health/live`, `/health/ready`) do **not** require authentication — they are infrastructure endpoints for container orchestration.
+
+#### Authorization
+
+- Apply `[Authorize]` at the **controller class level** on `PoliciesController` — all actions require a valid JWT by default.
+- Apply `[Authorize(Policy = "PolicyWrite")]` at the **action level** on the `PATCH /flag` endpoint — requires the `Policy.Write` role claim.
+- Never use `[AllowAnonymous]` on any policy endpoint.
+- **Roles:**
+  - `Policy.Read` — implicit for any authenticated user with a valid token. Grants access to all `GET` endpoints.
+  - `Policy.Write` — explicit role claim required. Grants access to `PATCH /api/v1/policies/flag`. Users without this role receive `403 Forbidden`.
+
+#### ICurrentUserService
+
+- Interface defined in `Application/Interfaces/ICurrentUserService.cs`.
+- Properties: `UserId`, `Email`, `Roles` (all extracted from JWT claims).
+- Method: `IsInRole(string role)`.
+- Implementation lives in `API/Services/CurrentUserService.cs` using `IHttpContextAccessor`.
+- Registered as `Scoped` in DI — one instance per HTTP request.
+- Handlers that need user identity inject `ICurrentUserService` via constructor injection — they never access `HttpContext`, `ClaimsPrincipal`, or `IHttpContextAccessor` directly.
+- `Domain` layer has **zero awareness** of `ICurrentUserService`.
+
+#### JwtOptions Configuration
+
+- Strongly-typed configuration class: `JwtOptions` with `Authority`, `Audience`, `RequireHttpsMetadata`.
+- `SectionName = "Jwt"`.
+- Validated at startup with `ValidateOnStart()` — misconfiguration fails before the first request.
+- Values supplied via environment variables only (`Jwt__Authority`, `Jwt__Audience`, `Jwt__RequireHttpsMetadata`) — never hardcoded in `appsettings.json` or source code.
+- No JWT secrets or signing keys committed to source control.
+
+#### Error Responses for Auth Failures
+
+- `401 Unauthorized` — token is missing, expired, has invalid signature, or wrong issuer/audience.
+- `403 Forbidden` — token is valid and authenticated, but the user lacks the required role (`Policy.Write` on `PATCH /flag`).
+- Both `401` and `403` must be returned as RFC 7807 `ProblemDetails` with `Content-Type: application/problem+json`.
+- Override `JwtBearerEvents.OnChallenge` and `OnForbidden` to return `ProblemDetails` instead of bare status codes.
+- Stack traces are never exposed in `401` or `403` responses.
+
+#### Middleware Pipeline Order
+
+The order of middleware registration in `Program.cs` is critical:
+
+1. `app.UseMiddleware<CorrelationIdMiddleware>()` — first, so all log entries carry the correlation ID
+2. `app.UseMiddleware<GlobalExceptionMiddleware>()` — before auth, so that 401/403 failures are caught and formatted as `ProblemDetails`
+3. `app.UseAuthentication()` — validates JWT token, populates `HttpContext.User`
+4. `app.UseAuthorization()` — evaluates `[Authorize]` policies
+5. `app.MapControllers()` — routes requests to controllers
+6. `app.MapHealthChecks(...)` — no authentication required
+
+**Why `GlobalExceptionMiddleware` before `UseAuthentication()`?** ASP.NET Core's default auth challenge/forbid handling returns bare `401`/`403` with no body. Placing `GlobalExceptionMiddleware` first intercepts these and wraps them as `ProblemDetails`.
+
+#### Prohibited Patterns
+
+- `[AllowAnonymous]` on any policy endpoint — all policy data requires authentication.
+- Reading `HttpContext.User` directly in handlers — violates Clean Architecture. Use `ICurrentUserService` instead.
+- Hardcoding JWT signing keys in source code — security vulnerability.
+- Cookie authentication — this is an API, not an MVC app. Use JWT Bearer only.
+- Auth logic in `Domain` layer — violates Clean Architecture. Auth stays in `API`; identity abstracted via `ICurrentUserService` in `Application`.
+- Creating a custom token issuer in the BFF — Keycloak issues all tokens. The BFF is a validator, not an issuer.
+- Accessing `IHttpContextAccessor` outside the `API` layer — couples infrastructure to ASP.NET Core.
+
 ### Structured Logging
 
 - Use `ILogger<T>` everywhere. Never use `Console.Write*` or `Debug.Write*`.
