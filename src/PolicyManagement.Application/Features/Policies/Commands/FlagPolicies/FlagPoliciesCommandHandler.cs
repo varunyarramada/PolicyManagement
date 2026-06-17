@@ -14,12 +14,19 @@ namespace PolicyManagement.Application.Features.Policies.Commands.FlagPolicies;
 /// <remarks>
 /// Execution sequence:
 /// <list type="number">
-///   <item><description>Load each policy individually via <see cref="IPolicyRepository.GetByIdAsync"/>. Throws <see cref="PolicyNotFoundException"/> on the first ID that cannot be found — no partial commits occur.</description></item>
+///   <item><description>Load all requested policies in a single batch query via <see cref="IPolicyRepository.GetByIdsAsync"/>. Throws <see cref="PolicyNotFoundException"/> for the first ID missing from the result set.</description></item>
 ///   <item><description>Validate state — throws <see cref="InvalidPolicyStateException"/> for the first policy that is already flagged.</description></item>
 ///   <item><description>Call <see cref="Domain.Entities.Policy.Flag"/> on each entity and persist all changes in a single call to <see cref="IPolicyRepository.UpdateRangeAsync"/>.</description></item>
-///   <item><description>Publish one <see cref="PolicyFlaggedEvent"/> per flagged policy after a successful commit. The event carries the policy ID, the acting user ID (from <see cref="ICurrentUserService.UserId"/>), and the operation timestamp.</description></item>
-///   <item><description>Invalidate the summary cache entry (<c>policy:v1:summary</c>) and the per-policy cache entry (<c>policy:v1:{id}</c>) for each flagged policy.</description></item>
+///   <item><description>For each flagged policy: publish one <see cref="PolicyFlaggedEvent"/> and invalidate its per-policy cache entry (<c>policy:v1:{id}</c>). The event carries the policy ID, the acting user ID (from <see cref="ICurrentUserService.UserId"/>), and the operation timestamp.</description></item>
+///   <item><description>Invalidate the summary cache entry (<c>policy:v1:summary</c>).</description></item>
 /// </list>
+/// <para>
+/// <see cref="ICurrentUserService.UserId"/> is expected to be non-null when this command
+/// is dispatched via the authenticated HTTP pipeline. The <c>[Authorize(Policy = "PolicyWrite")]</c>
+/// attribute on the controller action ensures a valid JWT is present before MediatR is invoked.
+/// An <see cref="InvalidOperationException"/> is thrown if <c>UserId</c> is <see langword="null"/>
+/// at handler invocation time — this indicates a broken auth contract, not a normal domain error.
+/// </para>
 /// <para>
 /// Cache invalidation happens after a successful commit. If event publishing or cache
 /// invalidation fails, the database state is already correct — those are best-effort
@@ -47,23 +54,18 @@ public sealed class FlagPoliciesCommandHandler(
             command.PolicyIds.Count,
             command.PolicyIds.Count == 1 ? "y" : "ies");
 
-        // ---- Step 1: Load all policies — fail fast on any missing ID ----
-        var policies = new List<Domain.Entities.Policy>(command.PolicyIds.Count);
+        // ---- Step 1: Load all policies in one batch query (single SQL IN clause) ----
+        var policies = await repository.GetByIdsAsync(command.PolicyIds, cancellationToken);
 
-        foreach (var id in command.PolicyIds)
+        // Detect the first requested ID that was not returned by the repository.
+        var missingId = command.PolicyIds.FirstOrDefault(id => policies.All(p => p.Id != id));
+        if (missingId != default)
         {
-            var policy = await repository.GetByIdAsync(id, cancellationToken);
+            logger.LogWarning(
+                "{Command} — policy {PolicyId} not found",
+                nameof(FlagPoliciesCommand), missingId);
 
-            if (policy is null)
-            {
-                logger.LogWarning(
-                    "{Command} — policy {PolicyId} not found",
-                    nameof(FlagPoliciesCommand), id);
-
-                throw new PolicyNotFoundException(id);
-            }
-
-            policies.Add(policy);
+            throw new PolicyNotFoundException(missingId);
         }
 
         // ---- Step 2: Validate state — fail fast on any already-flagged policy ----
@@ -95,21 +97,23 @@ public sealed class FlagPoliciesCommandHandler(
             policies.Count,
             policies.Count == 1 ? "y" : "ies");
 
-        // ---- Step 4: Publish one PolicyFlaggedEvent per policy ----
-        var userId = currentUser.UserId ?? string.Empty;
+        // ---- Step 4: Publish one PolicyFlaggedEvent per policy and invalidate per-policy cache ----
+        var userId = currentUser.UserId
+            ?? throw new InvalidOperationException(
+                "FlagPoliciesCommandHandler requires an authenticated user. " +
+                "Ensure [Authorize(Policy = \"PolicyWrite\")] is applied to the controller action.");
 
         foreach (var policy in policies)
         {
             await eventPublisher.PublishAsync(
                 new PolicyFlaggedEvent(policy.Id, userId, now),
                 cancellationToken);
+
+            await cache.RemoveAsync(PolicyCacheKey(policy.Id), cancellationToken);
         }
 
-        // ---- Step 5: Invalidate cache ----
+        // ---- Step 5: Invalidate summary cache ----
         await cache.RemoveAsync(SummaryCacheKey, cancellationToken);
-
-        foreach (var id in command.PolicyIds)
-            await cache.RemoveAsync(PolicyCacheKey(id), cancellationToken);
 
         logger.LogInformation(
             "{Command} completed — invalidated summary cache and {Count} per-policy cache entr{Suffix}",

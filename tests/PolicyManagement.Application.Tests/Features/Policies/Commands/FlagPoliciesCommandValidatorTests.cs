@@ -8,6 +8,14 @@ namespace PolicyManagement.Application.Tests.Features.Policies.Commands;
 /// <summary>
 /// Unit tests for <see cref="FlagPoliciesCommandValidator"/>.
 /// </summary>
+/// <remarks>
+/// These tests use <c>FluentValidation.TestHelper</c> (<c>TestValidate</c>,
+/// <c>ShouldHaveValidationErrorFor</c>, <c>ShouldNotHaveAnyValidationErrors</c>),
+/// which is the idiomatic FluentValidation testing pattern. The earlier
+/// <c>GetPoliciesQueryValidatorTests</c> used <c>await ValidateAsync()</c> with raw
+/// FluentAssertions. Both are valid; <c>TestHelper</c> is preferred for new validator
+/// tests because its DSL is more readable and failure messages are more specific.
+/// </remarks>
 public sealed class FlagPoliciesCommandValidatorTests
 {
     private readonly FlagPoliciesCommandValidator _validator = new();

@@ -53,6 +53,18 @@ public sealed class FlagPoliciesCommandHandlerTests
     }
 
     // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Sets up <c>GetByIdsAsync</c> to return exactly the supplied policies (single batch query).
+    /// </summary>
+    private void SetupGetByIds(params Domain.Entities.Policy[] policies) =>
+        _repositoryMock
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IEnumerable<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<Domain.Entities.Policy>)policies);
+
+    // -----------------------------------------------------------------------
     // Happy path — all IDs exist, none already flagged
     // -----------------------------------------------------------------------
 
@@ -65,9 +77,7 @@ public sealed class FlagPoliciesCommandHandlerTests
             new PolicyBuilder().WithId(Guid.NewGuid()).Build(),
             new PolicyBuilder().WithId(Guid.NewGuid()).Build(),
         };
-
-        foreach (var p in policies)
-            _repositoryMock.Setup(r => r.GetByIdAsync(p.Id, It.IsAny<CancellationToken>())).ReturnsAsync(p);
+        SetupGetByIds(policies);
 
         var command = new FlagPoliciesCommand(policies.Select(p => p.Id).ToList().AsReadOnly());
 
@@ -81,6 +91,29 @@ public sealed class FlagPoliciesCommandHandlerTests
     }
 
     [Fact]
+    public async Task Handle_WhenAllIdsExistAndNotFlagged_ShouldIssueOneRepositoryBatchQuery()
+    {
+        // Arrange
+        var policies = new[]
+        {
+            new PolicyBuilder().WithId(Guid.NewGuid()).Build(),
+            new PolicyBuilder().WithId(Guid.NewGuid()).Build(),
+            new PolicyBuilder().WithId(Guid.NewGuid()).Build(),
+        };
+        SetupGetByIds(policies);
+
+        var command = new FlagPoliciesCommand(policies.Select(p => p.Id).ToList().AsReadOnly());
+
+        // Act
+        await _handler.Handle(command, CancellationToken.None);
+
+        // Assert — exactly one batch call regardless of how many IDs are in the command (no N+1)
+        _repositoryMock.Verify(
+            r => r.GetByIdsAsync(It.IsAny<IEnumerable<Guid>>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task Handle_WhenAllIdsExistAndNotFlagged_ShouldFlagAllPolicies()
     {
         // Arrange
@@ -90,9 +123,7 @@ public sealed class FlagPoliciesCommandHandlerTests
             new PolicyBuilder().WithId(Guid.NewGuid()).Build(),
             new PolicyBuilder().WithId(Guid.NewGuid()).Build(),
         };
-
-        foreach (var p in policies)
-            _repositoryMock.Setup(r => r.GetByIdAsync(p.Id, It.IsAny<CancellationToken>())).ReturnsAsync(p);
+        SetupGetByIds(policies);
 
         IEnumerable<Domain.Entities.Policy>? savedPolicies = null;
         _repositoryMock
@@ -119,9 +150,7 @@ public sealed class FlagPoliciesCommandHandlerTests
             new PolicyBuilder().WithId(Guid.NewGuid()).Build(),
             new PolicyBuilder().WithId(Guid.NewGuid()).Build(),
         };
-
-        foreach (var p in policies)
-            _repositoryMock.Setup(r => r.GetByIdAsync(p.Id, It.IsAny<CancellationToken>())).ReturnsAsync(p);
+        SetupGetByIds(policies);
 
         var command = new FlagPoliciesCommand(policies.Select(p => p.Id).ToList().AsReadOnly());
 
@@ -139,8 +168,7 @@ public sealed class FlagPoliciesCommandHandlerTests
     {
         // Arrange
         var policy = new PolicyBuilder().WithId(Guid.NewGuid()).Build();
-
-        _repositoryMock.Setup(r => r.GetByIdAsync(policy.Id, It.IsAny<CancellationToken>())).ReturnsAsync(policy);
+        SetupGetByIds(policy);
 
         PolicyFlaggedEvent? capturedEvent = null;
         _eventPublisherMock
@@ -164,7 +192,7 @@ public sealed class FlagPoliciesCommandHandlerTests
     {
         // Arrange
         var policy = new PolicyBuilder().WithId(Guid.NewGuid()).Build();
-        _repositoryMock.Setup(r => r.GetByIdAsync(policy.Id, It.IsAny<CancellationToken>())).ReturnsAsync(policy);
+        SetupGetByIds(policy);
 
         var command = new FlagPoliciesCommand(new[] { policy.Id }.ToList().AsReadOnly());
 
@@ -186,9 +214,7 @@ public sealed class FlagPoliciesCommandHandlerTests
             new PolicyBuilder().WithId(Guid.NewGuid()).Build(),
             new PolicyBuilder().WithId(Guid.NewGuid()).Build(),
         };
-
-        foreach (var p in policies)
-            _repositoryMock.Setup(r => r.GetByIdAsync(p.Id, It.IsAny<CancellationToken>())).ReturnsAsync(p);
+        SetupGetByIds(policies);
 
         var command = new FlagPoliciesCommand(policies.Select(p => p.Id).ToList().AsReadOnly());
 
@@ -214,9 +240,10 @@ public sealed class FlagPoliciesCommandHandlerTests
         // Arrange
         var missingId = Guid.NewGuid();
 
+        // Repository returns an empty list — the requested ID is absent
         _repositoryMock
-            .Setup(r => r.GetByIdAsync(missingId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Domain.Entities.Policy?)null);
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IEnumerable<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<Domain.Entities.Policy>().AsReadOnly());
 
         var command = new FlagPoliciesCommand(new[] { missingId }.ToList().AsReadOnly());
 
@@ -233,8 +260,8 @@ public sealed class FlagPoliciesCommandHandlerTests
     {
         // Arrange
         _repositoryMock
-            .Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Domain.Entities.Policy?)null);
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IEnumerable<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<Domain.Entities.Policy>().AsReadOnly());
 
         var command = new FlagPoliciesCommand(new[] { Guid.NewGuid() }.ToList().AsReadOnly());
 
@@ -253,8 +280,8 @@ public sealed class FlagPoliciesCommandHandlerTests
     {
         // Arrange
         _repositoryMock
-            .Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Domain.Entities.Policy?)null);
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IEnumerable<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<Domain.Entities.Policy>().AsReadOnly());
 
         var command = new FlagPoliciesCommand(new[] { Guid.NewGuid() }.ToList().AsReadOnly());
 
@@ -278,8 +305,7 @@ public sealed class FlagPoliciesCommandHandlerTests
         // Arrange
         var policy = new PolicyBuilder().WithId(Guid.NewGuid()).Build();
         policy.Flag(DateTimeOffset.UtcNow); // already flagged
-
-        _repositoryMock.Setup(r => r.GetByIdAsync(policy.Id, It.IsAny<CancellationToken>())).ReturnsAsync(policy);
+        SetupGetByIds(policy);
 
         var command = new FlagPoliciesCommand(new[] { policy.Id }.ToList().AsReadOnly());
 
@@ -297,8 +323,7 @@ public sealed class FlagPoliciesCommandHandlerTests
         // Arrange
         var policy = new PolicyBuilder().WithId(Guid.NewGuid()).Build();
         policy.Flag(DateTimeOffset.UtcNow);
-
-        _repositoryMock.Setup(r => r.GetByIdAsync(policy.Id, It.IsAny<CancellationToken>())).ReturnsAsync(policy);
+        SetupGetByIds(policy);
 
         var command = new FlagPoliciesCommand(new[] { policy.Id }.ToList().AsReadOnly());
 
@@ -318,8 +343,7 @@ public sealed class FlagPoliciesCommandHandlerTests
         // Arrange
         var policy = new PolicyBuilder().WithId(Guid.NewGuid()).Build();
         policy.Flag(DateTimeOffset.UtcNow);
-
-        _repositoryMock.Setup(r => r.GetByIdAsync(policy.Id, It.IsAny<CancellationToken>())).ReturnsAsync(policy);
+        SetupGetByIds(policy);
 
         var command = new FlagPoliciesCommand(new[] { policy.Id }.ToList().AsReadOnly());
 
