@@ -1,0 +1,30 @@
+<!--
+  Solution-wide MSBuild properties and items shared by every project.
+  Keep this file minimal — project-specific settings belong in each .csproj.
+-->
+<Project>
+
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <!--
+      Opt-in to SDK-style package pruning for accurate dependency graphs.
+      Restore will warn about unused direct package references (NU1510) only
+      when TreatWarningsAsErrors is enabled in individual projects.
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Suppress known CVEs in System.Security.Cryptography.Xml that are pulled
+      transitively by Microsoft.EntityFrameworkCore.SqlServer.  No patched
+      version is currently available on NuGet.  Re-evaluate on each EF Core
+      minor/patch upgrade and remove these suppressions once resolved.
+      Advisories: GHSA-37gx-xxp4-5rgx, GHSA-w3x6-4m5h-cxqf
+    -->
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-37gx-xxp4-5rgx" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-w3x6-4m5h-cxqf" />
+  </ItemGroup>
+
+</Project>

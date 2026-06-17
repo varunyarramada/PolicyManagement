@@ -1,0 +1,2 @@
+dotnet build --no-incremental --configuration Release
+dotnet test --no-build --configuration Release
