@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using PolicyManagement.Application.Interfaces;
-using PolicyManagement.Infrastructure.Options;
+using PolicyManagement.Application.Options;
 using System.Text.Json;
 
 namespace PolicyManagement.Infrastructure.Caching;

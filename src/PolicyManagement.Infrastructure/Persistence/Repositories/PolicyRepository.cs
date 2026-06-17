@@ -46,11 +46,13 @@ public sealed class PolicyRepository(PolicyDbContext dbContext) : IPolicyReposit
 
         if (!string.IsNullOrWhiteSpace(filter.Search))
         {
-            var term = filter.Search.ToLower();
+            // SQL Server's default Latin1_General_CI_AS collation is case-insensitive.
+            // Calling .ToLower() is redundant, adds a computed LOWER() call that prevents
+            // index usage on policy_number and policyholder_name, and is therefore omitted.
             query = query.Where(p =>
-                p.PolicyNumber.ToLower().Contains(term) ||
-                p.PolicyholderName.ToLower().Contains(term) ||
-                p.Underwriter.ToLower().Contains(term));
+                p.PolicyNumber.Contains(filter.Search) ||
+                p.PolicyholderName.Contains(filter.Search) ||
+                p.Underwriter.Contains(filter.Search));
         }
 
         // ---- Total count (before paging) ----
@@ -72,6 +74,12 @@ public sealed class PolicyRepository(PolicyDbContext dbContext) : IPolicyReposit
     /// <inheritdoc/>
     public async Task<PolicySummaryData> GetSummaryAsync(CancellationToken cancellationToken = default)
     {
+        // TODO: This implementation loads all non-deleted policy rows into the .NET process
+        // before performing grouping/aggregation in LINQ-to-objects. For the 210-row seed
+        // dataset this is acceptable. Once the Policies table grows beyond ~10,000 rows,
+        // consider replacing with server-side SQL aggregation (multiple targeted GROUP BY
+        // queries or a database view) to avoid loading all rows across the network.
+        // The summary result is cached (policy:v1:summary, TTL 60s) to reduce frequency.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var thirtyDaysFromNow = today.AddDays(30);
 

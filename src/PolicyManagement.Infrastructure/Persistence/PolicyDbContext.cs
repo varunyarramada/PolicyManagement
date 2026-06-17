@@ -40,6 +40,10 @@ public sealed class PolicyDbContext(DbContextOptions<PolicyDbContext> options)
 
         foreach (var entry in ChangeTracker.Entries<IAuditableEntity>())
         {
+            // Use EF Core's property API (entry.Property(...).CurrentValue) rather than
+            // direct assignment (entry.Entity.CreatedAt = now) because the domain entity
+            // uses private setters. Direct assignment would not compile; the property API
+            // bypasses access modifiers and is the correct approach for this entity design.
             if (entry.State == EntityState.Added)
                 entry.Property(nameof(IAuditableEntity.CreatedAt)).CurrentValue = now;
 
@@ -62,6 +66,13 @@ public sealed class PolicyDbContext(DbContextOptions<PolicyDbContext> options)
 
         var policies = PolicySeeder.Generate();
         await Policies.AddRangeAsync(policies, cancellationToken);
-        await base.SaveChangesAsync(cancellationToken); // bypass audit interceptor for seed data
+
+        // INTENTIONAL: calls base.SaveChangesAsync to bypass the audit-timestamp override
+        // in the overridden SaveChangesAsync. Seed entities already have CreatedAt and
+        // UpdatedAt set to deterministic historical values inside PolicySeeder.BuildPolicy().
+        // Calling the override would overwrite those values with DateTimeOffset.UtcNow.
+        // If you add additional interceptors to SaveChangesAsync, ensure they are also
+        // safe to skip for seed data, or refactor to a skipAudit flag pattern.
+        await base.SaveChangesAsync(cancellationToken);
     }
 }

@@ -5,7 +5,7 @@ using PolicyManagement.Application.Interfaces;
 using PolicyManagement.Domain.Interfaces;
 using PolicyManagement.Infrastructure.Caching;
 using PolicyManagement.Infrastructure.Events;
-using PolicyManagement.Infrastructure.Options;
+using PolicyManagement.Application.Options;
 using PolicyManagement.Infrastructure.Persistence;
 using PolicyManagement.Infrastructure.Persistence.Repositories;
 
@@ -68,11 +68,15 @@ public static class InfrastructureServiceExtensions
         services.AddScoped<IPolicyRepository, PolicyRepository>();
 
         // ---- Cache ----
+        // ICacheService is Singleton because IMemoryCache is Singleton and cache state
+        // must be shared across requests. Use IOptions<T> (not IOptionsSnapshot<T>) for
+        // Singleton constructor injection — IOptionsSnapshot is Scoped and would cause
+        // a captive-dependency bug if injected into a Singleton.
         services.AddMemoryCache();
-        services.Configure<CacheOptions>(opts =>
-        {
-            configuration.GetSection(CacheOptions.SectionName).Bind(opts);
-        });
+        services.AddOptions<CacheOptions>()
+            .Configure(opts => configuration.GetSection(CacheOptions.SectionName).Bind(opts))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
         services.AddSingleton<ICacheService, InMemoryCacheService>();
 
         // ---- Event publisher ----
