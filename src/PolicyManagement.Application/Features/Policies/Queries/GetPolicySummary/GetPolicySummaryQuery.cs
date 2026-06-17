@@ -13,4 +13,4 @@ namespace PolicyManagement.Application.Features.Policies.Queries.GetPolicySummar
 /// The cache entry is invalidated by <c>FlagPoliciesCommandHandler</c> after a
 /// successful commit so that flagged-count statistics remain accurate within the TTL window.
 /// </remarks>
-public sealed record GetPolicySummaryQuery : IRequest<PolicySummaryResponse>;
+public sealed record GetPolicySummaryQuery() : IRequest<PolicySummaryResponse>;

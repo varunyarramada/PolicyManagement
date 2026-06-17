@@ -4,7 +4,6 @@ using Moq;
 using PolicyManagement.Application.DTOs;
 using PolicyManagement.Application.Features.Policies.Queries.GetPolicySummary;
 using PolicyManagement.Application.Interfaces;
-using PolicyManagement.Application.Mappings;
 using PolicyManagement.Application.Options;
 using PolicyManagement.Domain.Enums;
 using PolicyManagement.Domain.Interfaces;
@@ -106,16 +105,26 @@ public sealed class GetPolicySummaryQueryHandlerTests
         // Act
         var result = await _handler.Handle(new GetPolicySummaryQuery(), CancellationToken.None);
 
-        // Assert
-        var expected = data.ToPolicySummaryResponse();
-
-        result.TotalCount.Should().Be(expected.TotalCount);
-        result.FlaggedCount.Should().Be(expected.FlaggedCount);
-        result.ExpiringSoonCount.Should().Be(expected.ExpiringSoonCount);
-        result.CountByStatus.Should().BeEquivalentTo(expected.CountByStatus);
-        result.CountByRegion.Should().BeEquivalentTo(expected.CountByRegion);
-        result.CountByLineOfBusiness.Should().BeEquivalentTo(expected.CountByLineOfBusiness);
-        result.PremiumTotalByCurrency.Should().BeEquivalentTo(expected.PremiumTotalByCurrency);
+        // Assert — values asserted directly against the raw BuildSummaryData() constants
+        // so that a bug in ToPolicySummaryResponse() is caught here, not hidden by
+        // re-calling the same mapping method to produce the expected value.
+        result.TotalCount.Should().Be(100);
+        result.FlaggedCount.Should().Be(12);
+        result.ExpiringSoonCount.Should().Be(5);
+        result.CountByStatus["Active"].Should().Be(60);
+        result.CountByStatus["Expired"].Should().Be(25);
+        result.CountByStatus["Pending"].Should().Be(10);
+        result.CountByStatus["Cancelled"].Should().Be(5);
+        result.CountByRegion["Singapore"].Should().Be(30);
+        result.CountByRegion["Hong Kong"].Should().Be(25);
+        result.CountByLineOfBusiness["Property"].Should().Be(40);
+        result.CountByLineOfBusiness["Casualty"].Should().Be(30);
+        result.CountByLineOfBusiness["A&H"].Should().Be(20);   // LineOfBusiness.AH → "A&H"
+        result.CountByLineOfBusiness["Marine"].Should().Be(10);
+        result.PremiumTotalByCurrency["USD"].Should().Be(200_000m);
+        result.PremiumTotalByCurrency["SGD"].Should().Be(150_000m);
+        result.PremiumTotalByCurrency["HKD"].Should().Be(100_000m);
+        result.PremiumTotalByCurrency["AUD"].Should().Be(50_000m);
     }
 
     [Fact]
