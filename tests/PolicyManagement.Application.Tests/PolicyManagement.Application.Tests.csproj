@@ -26,6 +26,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\PolicyManagement.Application\PolicyManagement.Application.csproj" />
     <ProjectReference Include="..\..\src\PolicyManagement.Domain\PolicyManagement.Domain.csproj" />
+    <ProjectReference Include="..\PolicyManagement.TestHelpers\PolicyManagement.TestHelpers.csproj" />
   </ItemGroup>
 
 </Project>
