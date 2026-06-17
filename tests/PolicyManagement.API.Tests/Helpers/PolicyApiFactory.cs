@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
 using PolicyManagement.Domain.Entities;
 using PolicyManagement.Infrastructure.Persistence;
@@ -56,6 +57,16 @@ public sealed class PolicyApiFactory : WebApplicationFactory<Program>
             services.AddDbContext<PolicyDbContext>(opts =>
                 opts.UseInMemoryDatabase(_databaseName)
                     .UseInternalServiceProvider(inMemoryServiceProvider));
+
+            // ---- Remove the SQL Server health check (no SQL Server in test environment) ----
+            // Removing the registration means the readiness probe has no degraded dependency
+            // and will return 200 OK in the test environment.
+            services.Configure<HealthCheckServiceOptions>(opts =>
+            {
+                var sqlCheck = opts.Registrations.FirstOrDefault(r => r.Name == "sql-server");
+                if (sqlCheck is not null)
+                    opts.Registrations.Remove(sqlCheck);
+            });
 
             // ---- Override JWT Bearer to accept test-signed tokens ----
             services.PostConfigure<JwtBearerOptions>(
