@@ -18,7 +18,8 @@ Before generating any code, read the following files in order:
 4. `.github/skills/contract-first-api.md` — controller and response conventions
 5. `.github/skills/database-conventions.md` — EF Core, Fluent API, naming
 6. `.github/skills/error-handling.md` — ProblemDetails, middleware, exceptions
-7. `.github/skills/production-readiness.md` — logging, caching, health checks
+7. `.github/skills/authentication.md` — JWT Bearer, Keycloak, ICurrentUserService
+8. `.github/skills/production-readiness.md` — logging, caching, health checks
 
 Also read for domain context:
 
@@ -29,6 +30,7 @@ Also read for domain context:
 - `docs/architecture/decisions/ADR-004-icacheservice-abstraction.md`
 - `docs/architecture/decisions/ADR-005-ieventpublisher-abstraction.md`
 - `docs/architecture/decisions/ADR-006-database-indexing-strategy.md`
+- `docs/architecture/decisions/ADR-007-jwt-bearer-authentication.md`
 - `docs/analysis/policy-management-bff-analysis.md`
 
 ---
@@ -71,8 +73,14 @@ API → Application → Domain ← Infrastructure
 
 - EF Core types (`DbContext`, `DbSet`, LINQ-to-SQL, `IQueryable`) in `Domain` or `Application`
 - Business logic in controllers — controllers call `MediatR.Send()` only
-- `HttpContext` or ASP.NET Core types outside the `API` layer
+- `HttpContext` or ASP.NET Core types outside the `API` layer (except `ICurrentUserService` abstraction in `Application`)
 - Concrete infrastructure types injected anywhere except `Program.cs`
+- Authentication checks in handlers — `[Authorize]` on controllers handles authentication before handlers run
+- Authorization checks in handlers — `[Authorize(Policy = "PolicyWrite")]` on actions handles authorization before handlers run
+- Throwing authentication or authorization exceptions in application code — middleware handles 401/403 automatically
+- Returning bare `401`/`403` status codes without `ProblemDetails` body — override `JwtBearerEvents` instead
+- Hardcoding JWT secrets, Keycloak URLs, or signing keys in source code or `appsettings.json`
+- Adding `.RequireAuthorization()` to health check endpoints — they must be accessible without authentication
 
 ---
 
@@ -112,12 +120,13 @@ Generate in this sequence:
 
 1. **DTOs** — immutable `record` types; naming: `{Entity}Dto` or `{Entity}Response`
 2. **`ICacheService` interface** — in `Application/Interfaces/`
-3. **Commands** — immutable `record` types implementing `IRequest<T>`; naming: `{Verb}{Entity}Command`
-4. **Queries** — immutable `record` types implementing `IRequest<T>`; naming: `Get{Entity}By{Key}Query` or `Get{Entity}Query`
-5. **Handlers** — `sealed` classes; naming: `{CommandOrQuery}Handler`
-6. **Validators** — FluentValidation `AbstractValidator<T>`; naming: `{CommandOrQuery}Validator`
-7. **Pipeline behaviours** — naming: `{Name}PipelineBehavior`
-8. **Mapping logic** — static extension methods or dedicated mapper classes; no AutoMapper
+3. **`ICurrentUserService` interface** — in `Application/Interfaces/`; properties: `UserId`, `Email`, `Roles`; method: `IsInRole(string role)`
+4. **Commands** — immutable `record` types implementing `IRequest<T>`; naming: `{Verb}{Entity}Command`
+5. **Queries** — immutable `record` types implementing `IRequest<T>`; naming: `Get{Entity}By{Key}Query` or `Get{Entity}Query`
+6. **Handlers** — `sealed` classes; naming: `{CommandOrQuery}Handler`
+7. **Validators** — FluentValidation `AbstractValidator<T>`; naming: `{CommandOrQuery}Validator`
+8. **Pipeline behaviours** — naming: `{Name}PipelineBehavior`
+9. **Mapping logic** — static extension methods or dedicated mapper classes; no AutoMapper
 
 Required handlers:
 
@@ -146,11 +155,19 @@ Generate in this sequence:
 
 Generate in this sequence:
 
-1. **`CorrelationIdMiddleware`** — extracts `X-Correlation-ID` header or generates a new `Guid`; adds to `HttpContext.Items` and response headers
-2. **`GlobalExceptionMiddleware`** — catches all unhandled exceptions; maps domain exceptions to HTTP status codes; returns RFC 7807 `ProblemDetails`; never exposes stack traces
-3. **`PoliciesController`** — thin; all actions delegate to `_mediator.Send()`; four endpoints matching OpenAPI spec
-4. **Health checks** — register SQL Server health check; expose `/health/live` and `/health/ready`
-5. **`Program.cs`** — full DI composition root; register MediatR, FluentValidation, EF Core, repositories, cache, event publisher, middleware, health checks, Swagger
+1. **`JwtOptions` configuration class** — in `API/Configuration/`; properties: `Authority`, `Audience`, `RequireHttpsMetadata`; use `[Required]` attributes
+2. **`CurrentUserService`** — in `API/Services/`; implements `ICurrentUserService`; uses `IHttpContextAccessor` to read `ClaimsPrincipal`; extracts `sub`, `email`, and `realm_access.roles` claims
+3. **`CorrelationIdMiddleware`** — extracts `X-Correlation-ID` header or generates a new `Guid`; adds to `HttpContext.Items` and response headers
+4. **`GlobalExceptionMiddleware`** — catches all unhandled exceptions; maps domain exceptions to HTTP status codes; returns RFC 7807 `ProblemDetails`; never exposes stack traces
+5. **`PoliciesController`** — thin; all actions delegate to `_mediator.Send()`; four endpoints matching OpenAPI spec; add `[Authorize]` at class level; add `[Authorize(Policy = "PolicyWrite")]` on `PATCH /flag` action; add `[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]` on all actions; add `[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]` on `PATCH /flag` action
+6. **Health checks** — register SQL Server health check; expose `/health/live` and `/health/ready`; do **NOT** add `.RequireAuthorization()` to health check endpoint mappings
+7. **`Program.cs`** — full DI composition root; register:
+   - `JwtOptions` with `BindConfiguration()`, `ValidateDataAnnotations()`, `ValidateOnStart()`
+   - JWT Bearer authentication with `AddJwtBearer()` including `JwtBearerEvents.OnChallenge` and `OnForbidden` to return `ProblemDetails`
+   - Authorization with `AddAuthorizationBuilder().AddPolicy("PolicyWrite", policy => policy.RequireRole("Policy.Write"))`
+   - `ICurrentUserService` → `CurrentUserService` as `Scoped`
+   - MediatR, FluentValidation, EF Core, repositories, cache, event publisher, middleware, health checks, Swagger
+   - Middleware pipeline order: `CorrelationIdMiddleware` → `GlobalExceptionMiddleware` → `UseAuthentication()` → `UseAuthorization()` → `MapControllers()`
 
 ---
 
@@ -382,14 +399,26 @@ Use the todo tool to track progress. Check off each item before declaring the fe
 - [ ] Domain entities, enums, value objects, exceptions, events updated
 - [ ] Repository interface updated with any new method signatures
 - [ ] Application DTOs, command/query records created
+- [ ] `ICurrentUserService` interface defined in `Application/Interfaces/` if needed
 - [ ] Handler implemented with structured logging and CancellationToken
 - [ ] FluentValidation validator written for command/query
 - [ ] Repository implementation updated
 - [ ] EF Core configuration updated (column names, indexes, conversions)
-- [ ] Controller action added with all `[ProducesResponseType]` annotations
+- [ ] `JwtOptions` configuration class created in `API/Configuration/` with `[Required]` attributes
+- [ ] `CurrentUserService` implemented in `API/Services/` using `IHttpContextAccessor`
+- [ ] JWT Bearer authentication registered in `Program.cs` with `JwtBearerEvents` (OnChallenge, OnForbidden returning `ProblemDetails`)
+- [ ] Authorization policy registered: `PolicyWrite` requires `Policy.Write` role
+- [ ] `[Authorize]` attribute added to controller class
+- [ ] `[Authorize(Policy = "PolicyWrite")]` added to `PATCH /flag` action
+- [ ] Controller action added with all `[ProducesResponseType]` annotations (including 401 on all actions, 403 on role-protected actions)
+- [ ] Health check endpoints do **not** have `.RequireAuthorization()`
 - [ ] `Program.cs` DI registrations updated if new types introduced
-- [ ] No hardcoded configuration values anywhere
+- [ ] Middleware pipeline order correct: `CorrelationIdMiddleware` → `GlobalExceptionMiddleware` → `UseAuthentication()` → `UseAuthorization()` → `MapControllers()`
+- [ ] Integration tests written for auth scenarios: no token (401), expired token (401), valid token without role (403 on `/flag`), valid token with role (success)
+- [ ] Integration tests use `JwtTokenFactory` helper — never depend on running Keycloak
+- [ ] No hardcoded configuration values anywhere (especially JWT secrets, Keycloak URLs)
 - [ ] No business logic in controllers
+- [ ] No authentication/authorization checks in handlers — handled by `[Authorize]` attributes
 - [ ] No EF Core references in Domain or Application
 - [ ] XML doc comments on all new public types and methods
 - [ ] File-scoped namespaces used in all new files
