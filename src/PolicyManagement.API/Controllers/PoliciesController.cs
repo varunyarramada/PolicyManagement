@@ -85,7 +85,6 @@ public sealed class PoliciesController(IMediator mediator) : ControllerBase
     /// <param name="cancellationToken">Cancellation token.</param>
     [HttpGet("{id:guid}")]
     [ProducesResponseType(typeof(PolicyDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]

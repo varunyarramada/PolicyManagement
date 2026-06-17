@@ -31,6 +31,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\PolicyManagement.Api\PolicyManagement.Api.csproj" />
+    <ProjectReference Include="..\PolicyManagement.TestHelpers\PolicyManagement.TestHelpers.csproj" />
   </ItemGroup>
 
 </Project>
