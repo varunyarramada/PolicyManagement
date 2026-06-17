@@ -139,9 +139,9 @@ public sealed class GetPolicyByIdQueryHandlerTests
 
         // Act
         var act = () => _handler.Handle(new GetPolicyByIdQuery(Guid.NewGuid()), CancellationToken.None);
-        await act.Should().ThrowAsync<PolicyNotFoundException>();
 
-        // Assert — cache.SetAsync must never be called when the policy is not found
+        // Assert
+        await act.Should().ThrowAsync<PolicyNotFoundException>();
         _cacheMock.Verify(
             c => c.SetAsync(It.IsAny<string>(), It.IsAny<PolicyDto>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()),
             Times.Never);
@@ -316,24 +316,26 @@ public sealed class GetPolicyByIdQueryHandlerTests
     public async Task Handle_Always_ShouldUseCorrectCacheKeyFormat()
     {
         // Arrange
-        var id = Guid.NewGuid();
-        var expectedKey = $"policy:v1:{id}";
+        var policy = new PolicyBuilder().Build();
+        var expectedKey = $"policy:v1:{policy.Id}";
 
         _cacheMock
             .Setup(c => c.GetAsync<PolicyDto>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((PolicyDto?)null);
 
         _repositoryMock
-            .Setup(r => r.GetByIdAsync(id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Domain.Entities.Policy?)null);
+            .Setup(r => r.GetByIdAsync(policy.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(policy);
 
-        // Act — will throw PolicyNotFoundException, but we only care about the cache key used
-        var act = () => _handler.Handle(new GetPolicyByIdQuery(id), CancellationToken.None);
-        await act.Should().ThrowAsync<PolicyNotFoundException>();
+        // Act
+        await _handler.Handle(new GetPolicyByIdQuery(policy.Id), CancellationToken.None);
 
-        // Assert — cache was queried with the correct key
+        // Assert — both GetAsync and SetAsync use the same key
         _cacheMock.Verify(
             c => c.GetAsync<PolicyDto>(expectedKey, It.IsAny<CancellationToken>()),
+            Times.Once);
+        _cacheMock.Verify(
+            c => c.SetAsync(expectedKey, It.IsAny<PolicyDto>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 }
