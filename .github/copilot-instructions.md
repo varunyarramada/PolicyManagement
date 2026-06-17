@@ -15,6 +15,29 @@
 
 ---
 
+## Key Documentation & Decisions
+
+### Skills (Implementation Guides)
+
+- `.github/skills/authentication.md` — JWT Bearer authentication with Keycloak
+- `.github/skills/clean-architecture.md` — Layer boundaries and dependency rules
+- `.github/skills/contract-first-api.md` — OpenAPI 3.x spec-first development
+- `.github/skills/error-handling.md` — ProblemDetails and global exception middleware
+- `.github/skills/production-readiness.md` — Health checks, configuration, deployment
+- `.github/skills/testing-standards.md` — xUnit conventions, FluentAssertions, test naming
+
+### Architecture Decision Records
+
+- **ADR-001:** Clean Architecture — Domain-centric layering with inward dependencies
+- **ADR-002:** Logical CQRS with MediatR — Separated read/write handlers, single database
+- **ADR-003:** Repository Pattern — Abstraction over data access in Domain layer
+- **ADR-004:** ICacheService Abstraction — In-memory cache with future Redis swap
+- **ADR-005:** IEventPublisher Abstraction — In-memory events with future Kafka swap
+- **ADR-006:** Database Indexing Strategy — Composite indexes for query performance
+- **ADR-007:** JWT Bearer Authentication — Keycloak as identity provider, JWT Bearer token validation, role-based access control
+
+---
+
 ## Architecture — Clean Architecture
 
 This project follows **Clean Architecture** with strict inward-pointing dependencies.
@@ -176,6 +199,32 @@ The order of middleware registration in `Program.cs` is critical:
 - Auth logic in `Domain` layer — violates Clean Architecture. Auth stays in `API`; identity abstracted via `ICurrentUserService` in `Application`.
 - Creating a custom token issuer in the BFF — Keycloak issues all tokens. The BFF is a validator, not an issuer.
 - Accessing `IHttpContextAccessor` outside the `API` layer — couples infrastructure to ASP.NET Core.
+
+---
+
+## Cross-Cutting Concerns (Apply to All Agents)
+
+### Authentication & Authorization
+
+- **All API endpoints require JWT Bearer authentication** — absent or invalid tokens return `401 Unauthorized` with `ProblemDetails` format
+- **PATCH /api/v1/policies/flag requires Policy.Write role** — authenticated users without this role receive `403 Forbidden` with `ProblemDetails` format
+- **401 and 403 responses use ProblemDetails format** — override `JwtBearerEvents.OnChallenge` and `OnForbidden` to return RFC 7807 `ProblemDetails` instead of bare status codes
+- **Health check endpoints (`/health/live`, `/health/ready`) do NOT require authentication** — they are infrastructure endpoints for container orchestration; never apply `[Authorize]` or authentication middleware to these paths
+- **No authentication logic in handlers** — apply `[Authorize]` attributes on controllers only; handlers remain unaware of auth and inject `ICurrentUserService` when user identity is needed
+- **No JWT secrets in source code or committed config files** — all JWT configuration (`Jwt__Authority`, `Jwt__Audience`, `Jwt__RequireHttpsMetadata`) supplied via environment variables only
+
+### Middleware Pipeline Order
+
+The order of middleware registration in `Program.cs` must follow this exact sequence:
+
+1. **CorrelationIdMiddleware** — first, so all log entries carry the correlation ID
+2. **GlobalExceptionMiddleware** — before `UseAuthentication()`, so that 401/403 failures are caught and formatted as `ProblemDetails`
+3. **UseAuthentication()** — validates JWT token, populates `HttpContext.User`
+4. **UseAuthorization()** — evaluates `[Authorize]` policies
+5. **MapControllers()** — routes requests to controllers
+6. **MapHealthChecks(...)** — no authentication required
+
+**Rationale:** Placing `GlobalExceptionMiddleware` before `UseAuthentication()` ensures that ASP.NET Core's default auth challenge/forbid responses (bare `401`/`403` with no body) are intercepted and wrapped as `ProblemDetails`.
 
 ### Structured Logging
 
