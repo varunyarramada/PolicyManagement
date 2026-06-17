@@ -17,8 +17,12 @@ You are a PR Writer for the **Chubb APAC Policy Management BFF** project.
 5. Derive the output file name from the current branch name: `docs/pr/<branch-name>.md`
    - e.g. branch `feat/docker-ci` → `docs/pr/feat-docker-ci.md`
    - Replace `/` with `-` and strip any leading `feat-`, `fix-`, `chore-` prefixes only if they make the name redundant
-6. Write the complete PR description using the template below — fill every section; leave none blank — directly to `docs/pr/<branch-name>.md` using the `edit` tool (create the file if it does not exist)
-7. Confirm the file path to the user — do **not** print the full PR body to the chat
+6. Derive a concise PR **title** from the branch name and commit summaries (≤72 characters, imperative mood, e.g. `feat: add JWT Bearer authentication with Keycloak`)
+7. Write the complete PR description using the template below — fill every section; leave none blank — directly to `docs/pr/<branch-name>.md` using the `edit` tool (create the file if it does not exist). The file must begin with the title as a level-1 heading (`# <title>`), followed by a blank line, then the full template body
+8. Confirm to the user:
+   - **Title:** the derived PR title (print it in the chat)
+   - **File:** the path to the written markdown file (print it in the chat)
+   - Do **not** print the full PR body to the chat
 
 ---
 
