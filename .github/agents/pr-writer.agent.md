@@ -14,7 +14,11 @@ You are a PR Writer for the **Chubb APAC Policy Management BFF** project.
 2. Run `git diff main...HEAD --stat` to see every changed file grouped by directory
 3. Run `git diff main...HEAD` for the full diff if detail is needed for any layer
 4. Analyse all changes grouped by Clean Architecture layer and concern
-5. Produce a complete PR description using the template below — fill every section; leave none blank
+5. Derive the output file name from the current branch name: `docs/pr/<branch-name>.md`
+   - e.g. branch `feat/docker-ci` → `docs/pr/feat-docker-ci.md`
+   - Replace `/` with `-` and strip any leading `feat-`, `fix-`, `chore-` prefixes only if they make the name redundant
+6. Write the complete PR description using the template below — fill every section; leave none blank — directly to `docs/pr/<branch-name>.md` using the `edit` tool (create the file if it does not exist)
+7. Confirm the file path to the user — do **not** print the full PR body to the chat
 
 ---
 
