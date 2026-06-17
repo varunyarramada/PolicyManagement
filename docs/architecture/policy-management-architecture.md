@@ -19,6 +19,24 @@ Architectural decision rationale is captured in the ADRs under `docs/architectur
 
 ---
 
+## Technology Stack
+
+| Concern | Technology | Notes |
+|---------|------------|-------|
+| Runtime | .NET 10 / C# | |
+| Framework | ASP.NET Core Web API | |
+| ORM | EF Core with SQL Server | |
+| API Design | OpenAPI 3.x (contract-first) | Spec lives under `docs/openapi/` |
+| CQRS | Logical CQRS via MediatR | Single database; read/write handlers separated |
+| Caching | In-memory `ICacheService` | Redis-swappable without handler changes |
+| Eventing | `IEventPublisher` abstraction | Kafka-swappable without handler changes |
+| Testing | xUnit | Only test framework permitted |
+| Authentication | `Microsoft.AspNetCore.Authentication.JwtBearer` | JWT Bearer token validation |
+| Identity Provider | Keycloak 26.x (Docker) | OAuth2/OIDC token issuer — self-hosted, free, Apache 2.0 |
+| Authorization | ASP.NET Core Policy-based Authorization | Role-based access control via JWT claims |
+
+---
+
 ## Layer Responsibilities
 
 ```
@@ -250,6 +268,7 @@ All error responses use RFC 7807 `application/problem+json`. All successful resp
 | Status | Condition |
 |---|---|
 | `400 Bad Request` | Invalid `page`, `size`, `sort` field, or `status`/`lineOfBusiness` enum value |
+| `401 Unauthorized` | Missing or invalid JWT token |
 | `500 Internal Server Error` | Unhandled exception |
 
 ---
@@ -271,6 +290,7 @@ All error responses use RFC 7807 `application/problem+json`. All successful resp
 | Status | Condition |
 |---|---|
 | `400 Bad Request` | `id` is not a valid UUID |
+| `401 Unauthorized` | Missing or invalid JWT token |
 | `404 Not Found` | No policy with the given ID exists (or is soft-deleted) |
 | `500 Internal Server Error` | Unhandled exception |
 
@@ -307,6 +327,8 @@ All error responses use RFC 7807 `application/problem+json`. All successful resp
 | Status | Condition |
 |---|---|
 | `400 Bad Request` | `policyIds` is empty, exceeds 100, or contains invalid UUIDs |
+| `401 Unauthorized` | Missing or invalid JWT token |
+| `403 Forbidden` | Valid token but missing `Policy.Write` role |
 | `404 Not Found` | One or more policy IDs do not exist |
 | `409 Conflict` | One or more policies are already flagged for review |
 | `500 Internal Server Error` | Unhandled exception |
@@ -375,7 +397,115 @@ All error responses use RFC 7807 `application/problem+json`. All successful resp
 
 | Status | Condition |
 |---|---|
+| `401 Unauthorized` | Missing or invalid JWT token |
 | `500 Internal Server Error` | Unhandled exception |
+
+---
+
+## Authentication & Authorization
+
+> Added 2026-06-17. See [ADR-007](decisions/ADR-007-jwt-bearer-authentication.md) for full decision rationale.
+
+### Overview
+
+- All four endpoints require a valid JWT Bearer token (`401 Unauthorized` if missing or invalid).
+- The `PATCH /api/v1/policies/flag` endpoint additionally requires the `Policy.Write` role (`403 Forbidden` if the role is absent).
+- Tokens are issued by **Keycloak** (self-hosted). The BFF only validates tokens — it never issues them.
+- User identity is exposed to handlers through `ICurrentUserService`, defined in the `Application` layer. Handlers never access `HttpContext.User` directly.
+
+### Authentication Flow
+
+1. Frontend authenticates with Keycloak and receives a signed JWT access token.
+2. Frontend sends `Authorization: Bearer {token}` on every BFF request.
+3. ASP.NET Core JWT Bearer middleware validates the token signature, issuer (`Authority`), audience, and expiry.
+4. On success, claims (`sub`, `email`, `roles`) are populated into `HttpContext.User`.
+5. ASP.NET Core authorization middleware evaluates `[Authorize]` and `[Authorize(Policy = "PolicyWrite")]` attributes on controller actions.
+6. Handlers that require user context inject `ICurrentUserService` — they never reference `ClaimsPrincipal` or `HttpContext`.
+
+### Roles
+
+| Role | Description | Endpoints |
+|------|-------------|----------|
+| `Policy.Read` | Implicit for any authenticated user with a valid JWT token | All `GET` endpoints |
+| `Policy.Write` | Explicit role claim required | `PATCH /api/v1/policies/flag` |
+
+### Middleware Pipeline Order
+
+The authentication and authorization middleware must be placed in this exact order relative to other middleware:
+
+| Order | Middleware | Registered as |
+|-------|-----------|---------------|
+| 1 | `CorrelationIdMiddleware` | `app.UseMiddleware<CorrelationIdMiddleware>()` |
+| 2 | `GlobalExceptionMiddleware` | `app.UseMiddleware<GlobalExceptionMiddleware>()` |
+| 3 | Authentication | `app.UseAuthentication()` |
+| 4 | Authorization | `app.UseAuthorization()` |
+| 5 | Endpoint routing | `app.MapControllers()` |
+
+`GlobalExceptionMiddleware` is placed before authentication so that auth failures are caught and returned as RFC 7807 `ProblemDetails` responses, not raw ASP.NET Core challenge responses.
+
+### `JwtOptions` Configuration Class
+
+Defined in `PolicyManagement.API` (or `PolicyManagement.Infrastructure`). Bound via `IOptions<JwtOptions>` and validated at startup with `ValidateOnStart()`.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Authority` | `string` | Keycloak realm URL — e.g., `http://keycloak:8080/realms/policymanagement` |
+| `Audience` | `string` | Keycloak client ID — e.g., `policymanagement-api` |
+| `RequireHttpsMetadata` | `bool` | `true` in production; `false` in development (HTTP Keycloak) |
+
+### `ICurrentUserService` Interface
+
+Defined in `PolicyManagement.Application/Interfaces/`. Zero dependency on ASP.NET Core types.
+
+```csharp
+public interface ICurrentUserService
+{
+    string UserId { get; }          // JWT sub claim
+    string Email { get; }           // JWT email claim
+    IReadOnlyList<string> Roles { get; }
+    bool IsInRole(string role);
+}
+```
+
+Implemented in `PolicyManagement.API` using `IHttpContextAccessor`. This keeps `ClaimsPrincipal` and `HttpContext` entirely within the `API` layer, preserving the Clean Architecture dependency rule (ADR-001).
+
+---
+
+## Deployment
+
+The full local development stack is started with a single `docker-compose up` command. Three services are defined:
+
+| Service | Image | Port | Notes |
+|---------|-------|------|-------|
+| `policymanagement-api` | Multi-stage Dockerfile (this project) | `8080` | ASP.NET Core Web API; runs as non-root user |
+| `sqlserver` | `mcr.microsoft.com/mssql/server:2022-latest` | `1433` | SQL Server; EF Core migrations applied on startup |
+| `keycloak` | `quay.io/keycloak/keycloak:26` | `8081` | Keycloak identity provider; realm and client imported from `infra/keycloak/realm-export.json` on first start |
+
+The API service depends on both `sqlserver` and `keycloak` being healthy before accepting traffic. Health check dependencies are declared in `docker-compose.yml`.
+
+---
+
+## Configuration
+
+All configuration is externalised. No secrets or environment-specific values are hardcoded. Configuration sections are bound to strongly-typed `IOptions<T>` classes and validated at startup with `ValidateOnStart()`.
+
+### Options Classes
+
+| Class | Config Section | Properties |
+|-------|---------------|------------|
+| `SqlServerOptions` | `SqlServer` | `ConnectionString` |
+| `CacheOptions` | `Cache` | `SummaryTtlSeconds` |
+| `JwtOptions` | `Jwt` | `Authority`, `Audience`, `RequireHttpsMetadata` |
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `SqlServer__ConnectionString` | SQL Server connection string |
+| `Cache__SummaryTtlSeconds` | Cache TTL for summary endpoint (default: `60`) |
+| `Jwt__Authority` | Keycloak realm URL — e.g., `http://keycloak:8081/realms/policymanagement` |
+| `Jwt__Audience` | Keycloak client ID — e.g., `policymanagement-api` |
+| `Jwt__RequireHttpsMetadata` | `true` in production; `false` in development |
 
 ---
 
