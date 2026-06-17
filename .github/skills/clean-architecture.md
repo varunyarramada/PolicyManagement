@@ -92,6 +92,7 @@ Orchestrates use cases. Depends **only on `Domain`**. No EF Core, no SQL, no HTT
 | Input validators | `GetPoliciesQueryValidator`, `FlagPoliciesCommandValidator` |
 | Mapping logic | `PolicyMappingProfile` |
 | `ICacheService` interface | Cache abstraction — defined here, implemented in Infrastructure |
+| `ICurrentUserService` interface | User identity abstraction for handlers — defined here, implemented in API |
 | Other application service interfaces | Any application-level contract |
 
 Illustrative signatures:
@@ -168,6 +169,9 @@ Entry point and composition root. Depends on `Application` (for command/query ty
 | Pipeline filters | `ValidationFilter`, `CorrelationIdFilter` |
 | Health checks | `/health/live`, `/health/ready` |
 | OpenAPI / Swagger configuration | |
+| `CurrentUserService` implementation | Implements `ICurrentUserService` using `IHttpContextAccessor` |
+| JWT Bearer authentication registration | Registers authentication and authorization middleware in `Program.cs` |
+| `JwtOptions` configuration class | Strongly-typed JWT configuration (`Authority`, `Audience`, `RequireHttpsMetadata`) |
 
 Controller pattern:
 
@@ -194,6 +198,8 @@ public async Task<IActionResult> GetById(
 | `Application` → `Domain` | **Yes** | Core dependency — entities, interfaces, exceptions |
 | `Application` → `Infrastructure` | **No** | Application must not know about EF Core, SQL, etc. |
 | `Application` → `API` | **No** | Application is not aware of HTTP |
+| `Application` → `ClaimsPrincipal`, `HttpContext`, `IHttpContextAccessor` | **No** | Use `ICurrentUserService` abstraction instead |
+| `Domain` → `ICurrentUserService` or any auth concept | **No** | Domain has zero awareness of authentication |
 | `Infrastructure` → `Domain` | **Yes** | Implements repository interfaces; uses entities |
 | `Infrastructure` → `Application` | **Yes** | Implements `ICacheService` and other application interfaces |
 | `Infrastructure` → `API` | **No** | Infrastructure is not aware of HTTP |
@@ -475,7 +481,8 @@ PolicyManagement/
 │   │   │   ├── PolicySummaryResponse.cs
 │   │   │   └── PagedResponse.cs
 │   │   ├── Interfaces/
-│   │   │   └── ICacheService.cs
+│   │   │   ├── ICacheService.cs
+│   │   │   └── ICurrentUserService.cs         # User identity abstraction
 │   │   ├── Behaviours/
 │   │   │   ├── ValidationPipelineBehavior.cs
 │   │   │   └── LoggingPipelineBehavior.cs
@@ -509,6 +516,10 @@ PolicyManagement/
 │       │   └── GlobalExceptionMiddleware.cs
 │       ├── Filters/
 │       │   └── CorrelationIdFilter.cs
+│       ├── Services/
+│       │   └── CurrentUserService.cs        # Implements ICurrentUserService
+│       ├── Configuration/
+│       │   └── JwtOptions.cs                # JWT configuration class
 │       ├── HealthChecks/
 │       │   └── SqlServerHealthCheck.cs
 │       └── Program.cs
