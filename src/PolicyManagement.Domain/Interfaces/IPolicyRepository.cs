@@ -21,6 +21,21 @@ public interface IPolicyRepository
     Task<Policy?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Retrieves all non-deleted policies whose IDs appear in <paramref name="ids"/>
+    /// using a single <c>WHERE id IN (...)</c> database query.
+    /// IDs that do not correspond to an existing non-deleted policy are silently omitted
+    /// from the result — callers must compare the returned list against the requested IDs
+    /// to detect missing entries.
+    /// </summary>
+    /// <param name="ids">The collection of policy IDs to retrieve.</param>
+    /// <param name="cancellationToken">Token to cancel the asynchronous operation.</param>
+    /// <returns>
+    /// A read-only list of <see cref="Policy"/> entities, with tracking enabled so that
+    /// subsequent mutations are persisted via <see cref="UpdateRangeAsync"/>.
+    /// </returns>
+    Task<IReadOnlyList<Policy>> GetByIdsAsync(IEnumerable<Guid> ids, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns a paged, filtered, and sorted list of policies together with the total
     /// count of records that match the filter (before paging).
     /// </summary>

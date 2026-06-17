@@ -134,6 +134,17 @@ public sealed class PolicyRepository(PolicyDbContext dbContext) : IPolicyReposit
     }
 
     /// <inheritdoc/>
+    public async Task<IReadOnlyList<Policy>> GetByIdsAsync(
+        IEnumerable<Guid> ids,
+        CancellationToken cancellationToken = default)
+    {
+        var idList = ids.ToList();
+        return await dbContext.Policies
+            .Where(p => idList.Contains(p.Id))
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc/>
     public async Task UpdateRangeAsync(
         IEnumerable<Policy> policies,
         CancellationToken cancellationToken = default)
