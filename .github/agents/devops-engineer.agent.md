@@ -14,7 +14,8 @@ Before generating any configuration, read the following files in order:
 
 1. `.github/copilot-instructions.md` — master conventions and standards
 2. `.github/skills/production-readiness.md` — health checks, structured logging, configuration externalisation requirements
-3. `docs/architecture/policy-management-architecture.md` — health check paths, deployment requirements, API surface
+3. `.github/skills/authentication.md` — JWT Bearer, Keycloak deployment, container dependencies
+4. `docs/architecture/policy-management-architecture.md` — health check paths, deployment requirements, API surface
 
 ---
 
@@ -160,9 +161,35 @@ services:
       - ConnectionStrings__PolicyDb=Server=sqlserver,1433;Database=PolicyManagement;User Id=sa;Password=${SA_PASSWORD};TrustServerCertificate=True;
       - CacheOptions__PolicyByIdTtlMinutes=5
       - CacheOptions__SummaryTtlMinutes=1
+      - Jwt__Authority=http://keycloak:8080/realms/policymanagement
+      - Jwt__Audience=policymanagement-api
+      - Jwt__RequireHttpsMetadata=false
     depends_on:
       sqlserver:
         condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    networks:
+      - policymanagement-network
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: policymanagement-keycloak
+    command: start-dev
+    environment:
+      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
+      - KC_HTTP_ENABLED=true
+      - KC_HOSTNAME_STRICT=false
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     networks:
       - policymanagement-network
     restart: unless-stopped
@@ -197,20 +224,67 @@ networks:
     driver: bridge
 ```
 
+### Keycloak Service Configuration
+
+**Critical:** The BFF depends on Keycloak being healthy before it starts. The BFF validates JWT tokens by fetching public keys from Keycloak's OIDC discovery endpoint at startup.
+
+**Keycloak container:**
+- Uses `quay.io/keycloak/keycloak:26.0` image (Apache 2.0 license, free, production-grade)
+- Runs in `start-dev` mode for local development (no HTTPS required)
+- Exposes port `8080` inside the container, mapped to `8081` on the host to avoid conflict with the BFF
+- Health check targets `/health/ready` endpoint
+- `start_period: 60s` allows Keycloak 60 seconds to initialize before health checks start failing
+
+**Keycloak environment variables:**
+- `KEYCLOAK_ADMIN` — admin username (from `.env`)
+- `KEYCLOAK_ADMIN_PASSWORD` — admin password (from `.env`, never hardcoded)
+- `KC_HTTP_ENABLED=true` — allows HTTP in dev (production uses HTTPS)
+- `KC_HOSTNAME_STRICT=false` — disables strict hostname checking in dev
+
+**BFF JWT environment variables:**
+- `Jwt__Authority=http://keycloak:8080/realms/policymanagement` — **uses internal Docker network hostname** `keycloak`, not `localhost:8081`
+- `Jwt__Audience=policymanagement-api` — client ID configured in Keycloak
+- `Jwt__RequireHttpsMetadata=false` — **dev only**; production must use `true`
+
+**Startup order:**
+1. SQL Server starts, health check passes
+2. Keycloak starts, health check passes (after ~60s)
+3. BFF starts, fetches JWKS from Keycloak, begins accepting requests
+
+If Keycloak is unavailable at BFF startup, the BFF fails to start.
+
+**Keycloak Realm and Client Setup:**
+
+After the first `docker compose up`, access Keycloak at `http://localhost:8081` and:
+1. Log in with `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD`
+2. Create realm: `policymanagement`
+3. Create client: `policymanagement-api`
+   - Client authentication: On
+   - Authorization: Off
+   - Valid redirect URIs: `*` (dev only)
+4. Create roles: `Policy.Read`, `Policy.Write`
+5. Create test user with `Policy.Write` role for manual testing
+
 ### Rules
 
-- Never hardcode `SA_PASSWORD` — always read from `${SA_PASSWORD}` environment variable or a `.env` file
+- Never hardcode `SA_PASSWORD`, `KEYCLOAK_ADMIN`, or `KEYCLOAK_ADMIN_PASSWORD` — always read from `${VAR}` environment variable or a `.env` file
 - Include a `.env.example` file documenting required environment variables (with placeholder values only — never real secrets)
-- SQL Server depends_on uses `condition: service_healthy` so the API only starts after SQL Server passes its health check
+- SQL Server and Keycloak both use `condition: service_healthy` so the API only starts after both dependencies pass their health checks
 - Named volume `sqlserver-data` ensures data persists across container restarts
-- Both services share `policymanagement-network`
+- All services share `policymanagement-network`
+- **`Jwt__Authority` must use the internal Docker network hostname** (`http://keycloak:8080/...`), not `localhost`. The BFF resolves `keycloak` via Docker DNS.
+- `Jwt__RequireHttpsMetadata=false` is safe in local dev where Keycloak runs on HTTP. **Production must use `true`.**
 
 ### `.env.example`
 
 ```
 # Copy to .env and fill in real values. Never commit .env to source control.
 SA_PASSWORD=YourStrong!Passw0rd
+KEYCLOAK_ADMIN=admin
+KEYCLOAK_ADMIN_PASSWORD=YourStrong!AdminPassw0rd
 ```
+
+**JWT environment variables** are supplied directly in `docker-compose.yml` because they are not secrets in the development environment (they are configuration URLs and flags). In production, supply via secrets manager or environment-specific configuration.
 
 ---
 
@@ -332,6 +406,8 @@ jobs:
 - NuGet cache key is based on `**/*.csproj` hash — cache is invalidated when any project file changes
 - Never store secrets in the workflow YAML — use `${{ secrets.SECRET_NAME }}` for any sensitive values
 - Code coverage artifacts are uploaded for review; integrate a coverage reporting step (e.g., Codecov) when available
+- **Integration tests do NOT depend on Keycloak** — they use `JwtTokenFactory` with a symmetric test key; no Keycloak service is needed in the CI pipeline
+- JWT-related environment variables (`Jwt__Authority`, `Jwt__Audience`, `Jwt__RequireHttpsMetadata`) are **not needed** for test execution — tests override JWT Bearer configuration in `WebApplicationFactory`
 
 ---
 
@@ -423,6 +499,9 @@ Configure liveness and readiness separately in any orchestrator:
 |---|---|---|
 | `ASPNETCORE_ENVIRONMENT` | Runtime environment name | `Production`, `Development`, `Staging` |
 | `ConnectionStrings__PolicyDb` | SQL Server connection string (double underscore = nested key) | `Server=db;Database=PolicyManagement;User Id=sa;Password=...` |
+| `Jwt__Authority` | Keycloak realm URL — **must use internal Docker network hostname in containers** | `http://keycloak:8080/realms/policymanagement` (dev), `https://keycloak.prod.chubb.com/realms/policymanagement` (prod) |
+| `Jwt__Audience` | Keycloak client ID | `policymanagement-api` |
+| `Jwt__RequireHttpsMetadata` | HTTPS enforcement for OIDC discovery — **must be `true` in production** | `false` (dev), `true` (prod) |
 | `CacheOptions__PolicyByIdTtlMinutes` | TTL for per-policy cache entries in minutes | `5` |
 | `CacheOptions__SummaryTtlMinutes` | TTL for the summary aggregation cache in minutes | `1` |
 | `SqlServerOptions__CommandTimeoutSeconds` | EF Core command timeout in seconds | `30` |
@@ -430,6 +509,57 @@ Configure liveness and readiness separately in any orchestrator:
 | `ASPNETCORE_URLS` | Binding URLs for Kestrel | `http://+:8080` |
 
 Double-underscore (`__`) is the ASP.NET Core convention for mapping environment variables to nested configuration keys. This is consistent with `IOptions<T>` binding used throughout the application.
+
+**JWT Configuration Rules:**
+- `Jwt__Authority` in Docker Compose must point to the **internal Docker network hostname** (e.g., `http://keycloak:8080/realms/policymanagement`), not `http://localhost:8081/...`
+- `Jwt__RequireHttpsMetadata` must be `true` in production to enforce HTTPS for OIDC discovery; `false` is acceptable in local dev where Keycloak runs on HTTP
+- No JWT secrets (signing keys, client secrets) are stored in `docker-compose.yml` or any environment variable — the BFF validates tokens using public keys fetched from Keycloak's JWKS endpoint
+- JWT environment variables must be documented in `.env.example` for development; in production, supply via secrets manager (e.g., Kubernetes Secrets, AWS Secrets Manager)
+
+---
+
+## Production Deployment (Kubernetes)
+
+When deploying to Kubernetes or other production orchestrators:
+
+**Keycloak dependency:**
+- Keycloak must be deployed and healthy **before** BFF pods start
+- Use init containers or readiness probes to enforce this ordering
+- BFF pods will fail to start if Keycloak is unreachable at startup (they fetch JWKS during initialization)
+
+**JWT environment variables in production:**
+- `Jwt__Authority` points to the production Keycloak realm URL (e.g., `https://keycloak.prod.chubb.com/realms/policymanagement`)
+- `Jwt__RequireHttpsMetadata=true` — **enforced**; never use `false` in production
+- Supply via Kubernetes ConfigMap (non-secrets) or Secrets (if storing alongside other sensitive config)
+
+**Health check probes:**
+- Liveness probe: `GET /health/live` — **must NOT require authentication**
+- Readiness probe: `GET /health/ready` — **must NOT require authentication**
+- Configure probes with `initialDelaySeconds`, `periodSeconds`, `timeoutSeconds`, `failureThreshold` appropriate for the BFF's startup time and Keycloak dependency
+
+**Example Kubernetes liveness/readiness probe configuration:**
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health/live
+    port: 8080
+  initialDelaySeconds: 15
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health/ready
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 15
+  timeoutSeconds: 10
+  failureThreshold: 3
+```
+
+**Critical:** Health check endpoints return `200 OK` without any `Authorization` header. Never configure `requireAuthorization` or any auth middleware on these paths in Kubernetes ingress or service mesh configuration.
 
 ---
 
@@ -441,15 +571,24 @@ Use the todo tool to track progress.
 - [ ] Multi-stage build uses SDK for build stages and ASP.NET runtime for the final stage
 - [ ] Runtime stage runs as non-root user
 - [ ] `.dockerignore` excludes `bin/`, `obj/`, `tests/`, `docs/`, `.git/`
-- [ ] `docker-compose.yml` starts both API and SQL Server with `docker compose up`
-- [ ] SQL Server health check passes before API container starts
-- [ ] `SA_PASSWORD` is read from environment / `.env` — not hardcoded
-- [ ] `.env.example` documents all required variables with placeholder values
+- [ ] `docker-compose.yml` starts API, SQL Server, and Keycloak with `docker compose up`
+- [ ] Keycloak service included with health check and `start_period: 60s`
+- [ ] BFF service `depends_on` both `sqlserver` and `keycloak` with `condition: service_healthy`
+- [ ] `Jwt__Authority` uses internal Docker network hostname (`http://keycloak:8080/realms/...`), not `localhost`
+- [ ] `Jwt__RequireHttpsMetadata=false` in dev, `true` in production
+- [ ] Keycloak realm `policymanagement` and client `policymanagement-api` configured with roles `Policy.Read` and `Policy.Write`
+- [ ] SQL Server and Keycloak health checks pass before API container starts
+- [ ] `SA_PASSWORD`, `KEYCLOAK_ADMIN`, `KEYCLOAK_ADMIN_PASSWORD` read from environment / `.env` — not hardcoded
+- [ ] `.env.example` documents all required variables (SQL, Keycloak) with placeholder values
 - [ ] `.env` is listed in `.gitignore`
-- [ ] CI workflow runs all three test projects
+- [ ] No JWT secrets or signing keys in `docker-compose.yml` or any config file
+- [ ] CI workflow runs all four test projects
 - [ ] CI workflow fails if any test fails
+- [ ] CI pipeline does **not** start Keycloak service — tests use `JwtTokenFactory` with symmetric test key
 - [ ] Docker image build runs only after all tests pass
 - [ ] Smoke test confirms `/health/live` returns 200 in the built image
-- [ ] `appsettings.Production.json` contains no secrets or connection strings
+- [ ] `appsettings.Production.json` contains no secrets, no connection strings, no JWT config
 - [ ] `appsettings.Development.json` uses LocalDB or Docker SQL Server connection string
 - [ ] All environment variable names use double-underscore for nested keys
+- [ ] Production Kubernetes configuration enforces `Jwt__RequireHttpsMetadata=true`
+- [ ] Kubernetes liveness and readiness probes target `/health/live` and `/health/ready` without authentication
