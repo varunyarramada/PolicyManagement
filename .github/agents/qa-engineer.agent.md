@@ -18,8 +18,9 @@ Before generating any test code, read the following files in order:
 2. `.github/skills/testing-standards.md` — test patterns, naming, coverage expectations
 3. `.github/skills/clean-architecture.md` — layer structure (to understand what each layer contains and what to mock)
 4. `.github/skills/error-handling.md` — ProblemDetails format and exception-to-status-code mappings to assert against
-5. `docs/architecture/policy-management-architecture.md` — API contracts, domain model, HTTP status codes per endpoint
-6. `docs/analysis/policy-management-bff-analysis.md` — requirements to verify through tests
+5. `.github/skills/authentication.md` — JWT Bearer testing with JwtTokenFactory, no Keycloak dependency
+6. `docs/architecture/policy-management-architecture.md` — API contracts, domain model, HTTP status codes per endpoint
+7. `docs/analysis/policy-management-bff-analysis.md` — requirements to verify through tests
 
 ---
 
@@ -231,10 +232,12 @@ These are the **exact** status codes declared in the architecture document. Ever
 
 | Endpoint | Status codes to test |
 |---|---|
-| `GET /api/v1/policies` | 200, 400 |
-| `GET /api/v1/policies/{id}` | 200, 400, 404 |
-| `PATCH /api/v1/policies/flag` | 204, 400, 404, 409 |
-| `GET /api/v1/policies/summary` | 200 |
+| `GET /api/v1/policies` | 200, 400, 401 |
+| `GET /api/v1/policies/{id}` | 200, 400, 401, 404 |
+| `PATCH /api/v1/policies/flag` | 204, 400, 401, 403, 404, 409 |
+| `GET /api/v1/policies/summary` | 200, 401 |
+| `/health/live` | 200 (no auth required) |
+| `/health/ready` | 200 (no auth required) |
 
 ### Response body assertions
 
@@ -360,6 +363,26 @@ Use the todo tool to track progress through this list when generating tests for 
 
 ### Integration Tests (`PolicyManagement.API.Tests`)
 
+**Authentication & Authorization Tests:**
+- `GetPolicies_WithoutToken_ShouldReturn401Unauthorized`
+- `GetPolicies_WithExpiredToken_ShouldReturn401Unauthorized`
+- `GetPolicies_WithInvalidSignatureToken_ShouldReturn401Unauthorized`
+- `GetPolicies_WithValidToken_ShouldReturn200`
+- `GetPolicyById_WithoutToken_ShouldReturn401Unauthorized`
+- `GetPolicyById_WithExpiredToken_ShouldReturn401Unauthorized`
+- `GetPolicyById_WithValidToken_ShouldReturn200OrCorrectStatusCode`
+- `GetPolicySummary_WithoutToken_ShouldReturn401Unauthorized`
+- `GetPolicySummary_WithExpiredToken_ShouldReturn401Unauthorized`
+- `GetPolicySummary_WithValidToken_ShouldReturn200`
+- `FlagPolicies_WithoutToken_ShouldReturn401Unauthorized`
+- `FlagPolicies_WithExpiredToken_ShouldReturn401Unauthorized`
+- `FlagPolicies_WithValidTokenButNoRole_ShouldReturn403Forbidden` — missing `Policy.Write` role
+- `FlagPolicies_WithValidTokenAndPolicyWriteRole_ShouldReturn204NoContent`
+- `All401Responses_ShouldReturnProblemDetailsWithCorrelationId`
+- `All403Responses_ShouldReturnProblemDetailsWithCorrelationId`
+- `HealthLive_WithoutToken_ShouldReturn200` — health checks do not require auth
+- `HealthReady_WithoutToken_ShouldReturn200` — health checks do not require auth
+
 **`GET /api/v1/policies`:**
 - `GetPolicies_WhenDefaultParameters_ShouldReturn200WithPaginatedData`
 - `GetPolicies_WhenStatusFilterApplied_ShouldReturn200WithFilteredResults`
@@ -403,6 +426,88 @@ Use the todo tool to track progress through this list when generating tests for 
 ---
 
 ## Shared Test Infrastructure
+
+### `JwtTokenFactory` (integration tests)
+
+Place in `tests/PolicyManagement.API.Tests/Helpers/JwtTokenFactory.cs`. Generates valid and invalid test JWT tokens with configurable claims and roles. Never depends on a running Keycloak instance.
+
+```csharp
+internal static class JwtTokenFactory
+{
+    public const string TestSigningKey = "test-signing-key-must-be-at-least-32-chars!!";
+    public const string TestIssuer = "test-issuer";
+    public const string TestAudience = "policymanagement-api";
+
+    public static string GenerateToken(
+        string userId = "test-user-id",
+        string email = "test@example.com",
+        string[]? roles = null)
+    {
+        var claims = new List<Claim>
+        {
+            new(JwtRegisteredClaimNames.Sub, userId),
+            new(JwtRegisteredClaimNames.Email, email),
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+        };
+
+        if (roles != null)
+            foreach (var role in roles)
+                claims.Add(new Claim("realm_access.roles", role));  // Keycloak claim type
+
+        // ... sign with TestSigningKey, return token string
+    }
+
+    public static string GenerateExpiredToken()
+    {
+        // ... generates token with expires: DateTime.UtcNow.AddHours(-1)
+    }
+}
+```
+
+**Usage:**
+
+```csharp
+var token = JwtTokenFactory.GenerateToken(roles: new[] { "Policy.Write" });
+client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+```
+
+### `CustomWebApplicationFactory` (integration tests)
+
+Extends `PolicyManagementApiFactory` to override JWT Bearer authentication with a symmetric test key. Tests validate tokens signed with `JwtTokenFactory.TestSigningKey` — no dependency on Keycloak.
+
+Place in `tests/PolicyManagement.API.Tests/Fixtures/CustomWebApplicationFactory.cs` or update the existing factory.
+
+```csharp
+protected override void ConfigureWebHost(IWebHostBuilder builder)
+{
+    builder.ConfigureServices(services =>
+    {
+        // Remove production JWT Bearer registration
+        var jwtDescriptor = services.SingleOrDefault(
+            d => d.ServiceType == typeof(IConfigureOptions<JwtBearerOptions>));
+        if (jwtDescriptor != null)
+            services.Remove(jwtDescriptor);
+
+        // Register test JWT Bearer with symmetric key
+        services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+            .AddJwtBearer(options =>
+            {
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidIssuer = JwtTokenFactory.TestIssuer,
+                    ValidateAudience = true,
+                    ValidAudience = JwtTokenFactory.TestAudience,
+                    ValidateLifetime = true,
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = new SymmetricSecurityKey(
+                        Encoding.UTF8.GetBytes(JwtTokenFactory.TestSigningKey)),
+                    RoleClaimType = "realm_access.roles"  // Keycloak compatibility
+                };
+            });
+    });
+}
+```
 
 ### `PolicyManagementApiFactory` (integration tests)
 
@@ -474,13 +579,20 @@ Use the todo tool to track progress. Check off each item before declaring a test
 - [ ] Moq mocks verified with `Times.*` where interactions matter
 - [ ] FluentAssertions used — no bare `Assert.*` calls
 - [ ] All declared HTTP status codes for each endpoint have at least one integration test
+- [ ] All authentication scenarios tested: no token (401), expired token (401), invalid signature (401), valid token without role (403 on `/flag`), valid token with role (success)
+- [ ] `JwtTokenFactory` helper created for generating test tokens
+- [ ] `CustomWebApplicationFactory` overrides JWT Bearer to use symmetric test key — no Keycloak dependency in tests
+- [ ] Test tokens use `realm_access.roles` claim type for Keycloak compatibility
 - [ ] ProblemDetails format verified in all error response tests
-- [ ] `correlationId` field verified in error responses
+- [ ] `correlationId` field verified in `401` and `403` error responses
 - [ ] Stack traces confirmed absent from error response bodies
+- [ ] Health check endpoints tested without authentication (200 without token)
 - [ ] Pagination metadata structure verified in list endpoint tests
 - [ ] `FlagPolicies` atomicity test present (no partial updates)
 - [ ] Soft-deleted policies are not returned in get-by-id test
 - [ ] `Regions.HongKong` asserted to equal `"Hong Kong"` (with space)
+- [ ] No test depends on a running Keycloak instance — all auth tests use `JwtTokenFactory`
 - [ ] No test depends on another test's state
+- [ ] No hardcoded real JWT secrets in test code — use test symmetric key only
 - [ ] `CancellationToken.None` used in all test calls
 - [ ] Test `.csproj` includes all required NuGet packages
