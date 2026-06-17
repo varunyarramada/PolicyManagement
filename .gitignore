@@ -324,3 +324,4 @@ ConnectionStrings.local.json
 # JetBrains Rider cache
 .idea
 .idea/
+pr/

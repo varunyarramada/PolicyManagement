@@ -1,0 +1,46 @@
+# ── Build outputs ─────────────────────────────────────────────────────────────
+# Exclude compiled artefacts — the multi-stage Dockerfile handles its own build.
+**/bin/
+**/obj/
+
+# ── Test projects ─────────────────────────────────────────────────────────────
+# Tests are never shipped in the production image.
+tests/
+
+# ── Documentation ─────────────────────────────────────────────────────────────
+docs/
+*.md
+README*
+
+# ── Git metadata ──────────────────────────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+
+# ── CI / GitHub ───────────────────────────────────────────────────────────────
+.github/
+
+# ── IDE / OS artefacts ────────────────────────────────────────────────────────
+.vs/
+.vscode/
+*.user
+.DS_Store
+Thumbs.db
+
+# ── Secrets — never include real .env files in the build context ───────────────
+.env
+.env.*
+# Allow the example template (no secrets) through for documentation purposes
+!.env.example
+
+# ── Docker files ──────────────────────────────────────────────────────────────
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# ── Node (commitlint / husky) ─────────────────────────────────────────────────
+node_modules/
+package.json
+package-lock.json
+.husky/
+commitlint.config.js

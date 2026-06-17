@@ -1,0 +1,89 @@
+{
+  "realm": "policymanagement",
+  "displayName": "Policy Management",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+
+  "roles": {
+    "realm": [
+      {
+        "name": "Policy.Read",
+        "description": "Read access to policy data",
+        "composite": false,
+        "clientRole": false
+      },
+      {
+        "name": "Policy.Write",
+        "description": "Write access to flag policies",
+        "composite": false,
+        "clientRole": false
+      }
+    ],
+    "client": {}
+  },
+
+  "clients": [
+    {
+      "clientId": "policymanagement-api",
+      "name": "PolicyManagement API",
+      "description": "PolicyManagement BFF — resource server that validates JWT tokens",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": true,
+      "authorizationServicesEnabled": false,
+      "redirectUris": ["*"],
+      "webOrigins": ["*"],
+      "attributes": {
+        "access.token.lifespan": "300"
+      }
+    }
+  ],
+
+  "users": [
+    {
+      "username": "policy.reader@chubb.com",
+      "email": "policy.reader@chubb.com",
+      "firstName": "Policy",
+      "lastName": "Reader",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Reader@Test1!",
+          "temporary": true
+        }
+      ],
+      "realmRoles": ["Policy.Read"],
+      "clientRoles": {}
+    },
+    {
+      "username": "policy.writer@chubb.com",
+      "email": "policy.writer@chubb.com",
+      "firstName": "Policy",
+      "lastName": "Writer",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Writer@Test1!",
+          "temporary": true
+        }
+      ],
+      "realmRoles": ["Policy.Read", "Policy.Write"],
+      "clientRoles": {}
+    }
+  ]
+}
