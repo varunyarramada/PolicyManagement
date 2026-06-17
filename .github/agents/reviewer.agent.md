@@ -20,24 +20,26 @@ Before reviewing any code, read ALL of the following files. Every rule you enfor
 
 **Skill files (read all):**
 
-2. `.github/skills/clean-architecture.md`
-3. `.github/skills/cqrs-mediator.md`
-4. `.github/skills/contract-first-api.md`
-5. `.github/skills/database-conventions.md`
-6. `.github/skills/error-handling.md`
-7. `.github/skills/production-readiness.md`
-8. `.github/skills/testing-standards.md`
+2. `.github/skills/authentication.md`
+3. `.github/skills/clean-architecture.md`
+4. `.github/skills/cqrs-mediator.md`
+5. `.github/skills/contract-first-api.md`
+6. `.github/skills/database-conventions.md`
+7. `.github/skills/error-handling.md`
+8. `.github/skills/production-readiness.md`
+9. `.github/skills/testing-standards.md`
 
 **Architecture and domain reference:**
 
-9. `docs/architecture/policy-management-architecture.md`
-10. `docs/architecture/decisions/ADR-001-clean-architecture.md`
-11. `docs/architecture/decisions/ADR-002-logical-cqrs-with-mediatr.md`
-12. `docs/architecture/decisions/ADR-003-repository-pattern.md`
-13. `docs/architecture/decisions/ADR-004-icacheservice-abstraction.md`
-14. `docs/architecture/decisions/ADR-005-ieventpublisher-abstraction.md`
-15. `docs/architecture/decisions/ADR-006-database-indexing-strategy.md`
-16. `docs/analysis/policy-management-bff-analysis.md`
+10. `docs/architecture/policy-management-architecture.md`
+11. `docs/architecture/decisions/ADR-001-clean-architecture.md`
+12. `docs/architecture/decisions/ADR-002-logical-cqrs-with-mediatr.md`
+13. `docs/architecture/decisions/ADR-003-repository-pattern.md`
+14. `docs/architecture/decisions/ADR-004-icacheservice-abstraction.md`
+15. `docs/architecture/decisions/ADR-005-ieventpublisher-abstraction.md`
+16. `docs/architecture/decisions/ADR-006-database-indexing-strategy.md`
+17. `docs/architecture/decisions/ADR-007-jwt-bearer-authentication.md`
+18. `docs/analysis/policy-management-bff-analysis.md``
 
 ---
 
@@ -157,7 +159,38 @@ Reference: `.github/copilot-instructions.md`
 
 ---
 
-### 5. Async Patterns
+### 5. Authentication & Authorization
+
+Reference: `.github/skills/authentication.md`, `ADR-007`
+
+- [ ] `[Authorize]` attribute present at controller class level on `PoliciesController`
+- [ ] `[Authorize(Policy = "PolicyWrite")]` attribute present on the `PATCH /flag` action method
+- [ ] No `[AllowAnonymous]` attribute on any policy endpoint
+- [ ] No auth logic in handlers — handlers use `ICurrentUserService` only when user identity is needed
+- [ ] `JwtOptions` registered with `ValidateOnStart()` in `Program.cs`
+- [ ] `JwtBearerEvents.OnChallenge` and `OnForbidden` overridden to return `ProblemDetails` format (not bare 401/403)
+- [ ] Health check endpoints (`/health/live`, `/health/ready`) have no `.RequireAuthorization()` call
+- [ ] No JWT secrets or Keycloak URLs hardcoded in any `.cs` file
+- [ ] `CurrentUserService` implementation is in `API/Services/` — not in `Application` or `Domain`
+- [ ] `ICurrentUserService` interface is in `Application/Interfaces/`
+- [ ] Middleware order in `Program.cs`: `CorrelationIdMiddleware` → `GlobalExceptionMiddleware` → `UseAuthentication()` → `UseAuthorization()` → `MapControllers()`
+- [ ] Integration test for 401 response verifies `Content-Type: application/problem+json`
+- [ ] Integration test for 403 response verifies `Content-Type: application/problem+json`
+- [ ] Integration tests cover all auth scenarios using `JwtTokenFactory` — no Keycloak container dependency
+
+**Critical violations — must be flagged:**
+
+- Auth checks in handler code (e.g., `if (currentUser.IsInRole("Policy.Write"))`) — must be enforced via `[Authorize]` attributes only
+- Hardcoded JWT secrets or Keycloak URLs in source code
+- Missing `[Authorize]` on `PoliciesController` or `[Authorize(Policy = "PolicyWrite")]` on `PATCH /flag`
+- Health check endpoints requiring authentication
+- Bare 401/403 responses without `ProblemDetails` body
+- `IHttpContextAccessor` used in `Application` or `Domain` layers
+- Tests that depend on a running Keycloak container
+
+---
+
+### 6. Async Patterns
 
 Reference: `.github/copilot-instructions.md`
 
@@ -169,7 +202,7 @@ Reference: `.github/copilot-instructions.md`
 
 ---
 
-### 6. Configuration
+### 7. Configuration
 
 Reference: `.github/copilot-instructions.md`, `.github/skills/production-readiness.md`
 
@@ -182,7 +215,7 @@ Reference: `.github/copilot-instructions.md`, `.github/skills/production-readine
 
 ---
 
-### 7. EF Core Conventions
+### 8. EF Core Conventions
 
 Reference: `.github/skills/database-conventions.md`, `ADR-006`
 
@@ -199,7 +232,7 @@ Reference: `.github/skills/database-conventions.md`, `ADR-006`
 
 ---
 
-### 8. Error Handling
+### 9. Error Handling
 
 Reference: `.github/skills/error-handling.md`
 
@@ -217,7 +250,7 @@ Reference: `.github/skills/error-handling.md`
 
 ---
 
-### 9. Controller Conventions
+### 10. Controller Conventions
 
 Reference: `.github/skills/contract-first-api.md`
 
@@ -230,7 +263,7 @@ Reference: `.github/skills/contract-first-api.md`
 
 ---
 
-### 10. Caching
+### 11. Caching
 
 Reference: `ADR-004`, `.github/agents/backend-developer.agent.md` — Cache keys section
 
@@ -246,7 +279,7 @@ Reference: `ADR-004`, `.github/agents/backend-developer.agent.md` — Cache keys
 
 ---
 
-### 11. Repository Pattern
+### 12. Repository Pattern
 
 Reference: `ADR-003`, `.github/skills/clean-architecture.md`
 
@@ -259,7 +292,7 @@ Reference: `ADR-003`, `.github/skills/clean-architecture.md`
 
 ---
 
-### 12. Event Publishing
+### 13. Event Publishing
 
 Reference: `ADR-005`
 
@@ -271,7 +304,7 @@ Reference: `ADR-005`
 
 ---
 
-### 13. Validation
+### 14. Validation
 
 Reference: `.github/skills/cqrs-mediator.md`
 
@@ -283,7 +316,7 @@ Reference: `.github/skills/cqrs-mediator.md`
 
 ---
 
-### 14. Testing Standards
+### 15. Testing Standards
 
 Reference: `.github/skills/testing-standards.md`, `.github/agents/qa-engineer.agent.md`
 
@@ -302,18 +335,22 @@ Reference: `.github/skills/testing-standards.md`, `.github/agents/qa-engineer.ag
 
 ---
 
-### 15. Security
+### 16. Security
 
-Reference: OWASP Top 10, `.github/copilot-instructions.md`
+Reference: OWASP Top 10, `.github/copilot-instructions.md`, `.github/skills/authentication.md`
 
 - [ ] No secrets, passwords, or API keys committed in any file
+- [ ] No JWT secrets or Keycloak URLs hardcoded in source code
 - [ ] No connection strings with plaintext passwords in `appsettings.json` or `appsettings.Production.json`
 - [ ] Docker runtime stage runs as non-root user
-- [ ] `SA_PASSWORD` in `docker-compose.yml` reads from environment variable — not hardcoded
+- [ ] `SA_PASSWORD`, `KEYCLOAK_ADMIN`, `KEYCLOAK_ADMIN_PASSWORD` in `docker-compose.yml` read from environment variable — not hardcoded
 - [ ] No SQL injection risk — all database access via EF Core parameterised queries (no raw SQL string concatenation)
 - [ ] Input validation runs before any domain logic executes
 - [ ] Stack traces not exposed in any API error response
 - [ ] Swagger UI is gated behind `app.Environment.IsDevelopment()` — not enabled in production by default
+- [ ] `[Authorize]` attributes present on all policy endpoints — no `[AllowAnonymous]`
+- [ ] Health check endpoints do NOT require authentication
+- [ ] 401 and 403 responses return `ProblemDetails` format — not bare status codes
 
 ---
 
