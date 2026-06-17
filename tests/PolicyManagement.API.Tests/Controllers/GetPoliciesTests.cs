@@ -94,6 +94,9 @@ public sealed class GetPoliciesTests : IAsyncLifetime
         var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(JsonOptions);
         problem!.Status.Should().Be(400);
         problem.Extensions.Should().ContainKey("correlationId");
+        // ValidationException handler always adds an 'errors' map with field-level messages
+        problem.Extensions.Should().ContainKey("errors",
+            "400 responses from validation failures must include a field-level errors map");
     }
 
     [Fact]
@@ -108,6 +111,13 @@ public sealed class GetPoliciesTests : IAsyncLifetime
         // Assert
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         response.Content.Headers.ContentType?.MediaType.Should().Be("application/problem+json");
+
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(JsonOptions);
+        problem!.Status.Should().Be(400);
+        problem.Extensions.Should().ContainKey("correlationId");
+        // ValidationException handler always adds an 'errors' map with field-level messages
+        problem.Extensions.Should().ContainKey("errors",
+            "400 responses from validation failures must include a field-level errors map");
     }
 
     // -----------------------------------------------------------------------
