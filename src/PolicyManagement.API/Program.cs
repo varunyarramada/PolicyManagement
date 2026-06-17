@@ -1,3 +1,4 @@
+using Asp.Versioning;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -37,7 +38,10 @@ try
         {
             var jwt = builder.Configuration
                 .GetSection(JwtOptions.SectionName)
-                .Get<JwtOptions>() ?? new JwtOptions();
+                .Get<JwtOptions>()
+                ?? throw new InvalidOperationException(
+                    $"Configuration section '{JwtOptions.SectionName}' is missing or invalid. "
+                    + "Ensure Jwt__Authority and Jwt__Audience are set via environment variables.");
 
             opts.Authority            = jwt.Authority;
             opts.Audience             = jwt.Audience;
@@ -63,7 +67,11 @@ try
                     problem.Extensions["correlationId"] =
                         ctx.HttpContext.Items["CorrelationId"]?.ToString() ?? string.Empty;
 
-                    await ctx.Response.WriteAsJsonAsync(problem, ctx.HttpContext.RequestAborted);
+                    await ctx.Response.WriteAsJsonAsync(
+                        problem,
+                        options: null,
+                        contentType: "application/problem+json",
+                        cancellationToken: ctx.HttpContext.RequestAborted);
                 },
 
                 // Return ProblemDetails on 403 (authenticated but insufficient role) ----
@@ -83,7 +91,11 @@ try
                     problem.Extensions["correlationId"] =
                         ctx.HttpContext.Items["CorrelationId"]?.ToString() ?? string.Empty;
 
-                    await ctx.Response.WriteAsJsonAsync(problem, ctx.HttpContext.RequestAborted);
+                    await ctx.Response.WriteAsJsonAsync(
+                        problem,
+                        options: null,
+                        contentType: "application/problem+json",
+                        cancellationToken: ctx.HttpContext.RequestAborted);
                 }
             };
         });
@@ -102,6 +114,13 @@ try
     // ---- API ----
     builder.Services.AddHttpContextAccessor();
     builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
+    builder.Services.AddApiVersioning(opts =>
+    {
+        opts.DefaultApiVersion = new ApiVersion(1, 0);
+        opts.AssumeDefaultVersionWhenUnspecified = true;
+        opts.ReportApiVersions = true;
+    })
+    .AddMvc();
     builder.Services.AddControllers();
 
     // ---- Health checks ----
@@ -116,8 +135,9 @@ try
 
     var app = builder.Build();
 
-    // ---- Migrate and seed on startup ----
-    await InfrastructureServiceExtensions.ApplyMigrationsAndSeedAsync(app.Services);
+    // ---- Migrate and seed on startup (skipped in Test environment — InMemory DB) ----
+    if (!app.Environment.IsEnvironment("Test"))
+        await InfrastructureServiceExtensions.ApplyMigrationsAndSeedAsync(app.Services);
 
     // ============================================================
     // Middleware pipeline — ORDER IS CRITICAL

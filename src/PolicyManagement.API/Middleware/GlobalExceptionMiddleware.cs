@@ -12,9 +12,15 @@ namespace PolicyManagement.API.Middleware;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Must be registered <strong>before</strong> <c>UseAuthentication()</c> so that
-/// ASP.NET Core's default bare 401/403 challenge responses are also intercepted and
-/// wrapped as <c>ProblemDetails</c>.
+/// Catches all unhandled C# exceptions thrown during request processing.
+/// Must be registered <strong>before</strong> <c>UseAuthentication()</c> so that any
+/// unexpected exceptions thrown by authentication or authorization middleware are also
+/// captured and formatted as <c>ProblemDetails</c>.
+/// </para>
+/// <para>
+/// Note: 401 and 403 auth challenge/forbid responses are handled separately via
+/// <c>JwtBearerEvents.OnChallenge</c> and <c>JwtBearerEvents.OnForbidden</c> in
+/// <c>Program.cs</c> — those are short-circuit responses, not exceptions.
 /// </para>
 /// <para>
 /// Exception-to-status-code mapping:

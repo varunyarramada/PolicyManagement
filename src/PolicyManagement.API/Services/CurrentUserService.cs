@@ -27,16 +27,28 @@ namespace PolicyManagement.API.Services;
 /// </remarks>
 public sealed class CurrentUserService(IHttpContextAccessor httpContextAccessor) : ICurrentUserService
 {
-    private readonly System.Security.Claims.ClaimsPrincipal? _user =
-        httpContextAccessor.HttpContext?.User;
+    private readonly IHttpContextAccessor _httpContextAccessor = httpContextAccessor;
+
+    /// <summary>
+    /// Gets the current authenticated <see cref="System.Security.Claims.ClaimsPrincipal"/>
+    /// from the live <see cref="IHttpContextAccessor"/> on each access, so that any
+    /// mutations to <c>HttpContext.User</c> after construction are always visible.
+    /// </summary>
+    private System.Security.Claims.ClaimsPrincipal? User =>
+        _httpContextAccessor.HttpContext?.User;
 
     /// <inheritdoc/>
     public string? UserId =>
-        _user?.FindFirst("sub")?.Value;
+        // With MapInboundClaims = true (default), JWT 'sub' is remapped to ClaimTypes.NameIdentifier.
+        // Fall back to the short-form 'sub' for configurations where mapping is disabled.
+        User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+        ?? User?.FindFirst("sub")?.Value;
 
     /// <inheritdoc/>
     public string? Email =>
-        _user?.FindFirst("email")?.Value;
+        // With MapInboundClaims = true (default), JWT 'email' is remapped to ClaimTypes.Email.
+        User?.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
+        ?? User?.FindFirst("email")?.Value;
 
     /// <inheritdoc/>
     public IReadOnlyList<string> Roles => ExtractRoles();
@@ -51,12 +63,13 @@ public sealed class CurrentUserService(IHttpContextAccessor httpContextAccessor)
     /// </summary>
     private IReadOnlyList<string> ExtractRoles()
     {
-        if (_user is null)
+        var user = User;
+        if (user is null)
             return [];
 
         // Keycloak emits roles as a nested JSON object:
         // { "realm_access": { "roles": ["Policy.Write", "offline_access", ...] } }
-        var realmAccessClaim = _user.FindFirst("realm_access")?.Value;
+        var realmAccessClaim = user.FindFirst("realm_access")?.Value;
         if (string.IsNullOrWhiteSpace(realmAccessClaim))
             return [];
 
